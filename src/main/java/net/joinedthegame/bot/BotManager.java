@@ -108,7 +108,9 @@ public final class BotManager {
         ServerPlayer best = null;
         double bestDist = Double.MAX_VALUE;
         for (ServerPlayer player : bot.level().players()) {
-            if (player instanceof BotPlayer || player.isSpectator()) continue;
+            if (player instanceof BotPlayer) continue;
+            // Spectating: not really here, so not someone to stay near (unless the config says so).
+            if (player.isSpectator() && !net.joinedthegame.JtgConfig.ANCHOR_TO_SPECTATORS.get()) continue;
             double d = player.distanceToSqr(bot);
             if (d < bestDist) {
                 bestDist = d;
@@ -143,6 +145,11 @@ public final class BotManager {
             if (home != null && home.dimension() == level.dimension() && home.pos().distSqr(pos) <= r * r) return true;
         }
         return false;
+    }
+
+    public void setIdentity(BotRecord record, String identity) {
+        record.setIdentity(identity);
+        roster().markDirty();
     }
 
     public void setHome(BotRecord record, @Nullable GlobalPos home) {
@@ -283,9 +290,15 @@ public final class BotManager {
 
             BotPlayer bot = new BotPlayer(this.server, level, profile, info);
             input.ifPresent(bot::load);
+            // A copy of the player's guide book (the bot named after the player used to load the
+            // player's own things when it joined; see IntegratedServerMixin): not the bot's.
+            var inv = bot.getInventory();
+            for (int i = 0; i < inv.getContainerSize(); i++) if (net.joinedthegame.GuideBook.isGuide(inv.getItem(i))) inv.setItem(i, net.minecraft.world.item.ItemStack.EMPTY);
             net.neoforged.neoforge.event.EventHooks.firePlayerLoadingEvent(bot, this.server.getPlayerList(), bot.getStringUUID());
             bot.snapTo(pos.x, pos.y, pos.z, yaw, 0);
-            this.brains.put(record.uuid(), new BotBrain(record));
+            BotBrain brain = new BotBrain(record);
+            brain.bind(bot); // its own memory from the first moment (see BotBrain.bind)
+            this.brains.put(record.uuid(), brain);
             this.server.getPlayerList().placeNewPlayer(new BotConnection(), bot,
                     new CommonListenerCookie(profile, 0, info, false));
             bot.connection.markClientLoaded();

@@ -50,7 +50,7 @@ public final class LeatherTask implements Task {
                 this.target = null;
                 return Status.RUNNING;
             }
-            List<AbstractCow> nearby = Senses.entitiesNear(bot, AbstractCow.class, 32, c -> c.isAlive() && !c.isBaby());
+            List<AbstractCow> nearby = Senses.entitiesNear(bot, AbstractCow.class, 32, c -> c.isAlive() && !c.isBaby() && Senses.wouldNotice(bot, c));
             this.target = nearby.size() > 2 ? nearby.getFirst() : null;
             if (this.target == null) return lookForCows(bot, brain);
             return Status.RUNNING;

@@ -40,6 +40,7 @@ public final class JtgEvents {
     @SubscribeEvent
     static void onServerTick(ServerTickEvent.Post event) {
         BotManager.get(event.getServer()).tick();
+        Snapshot.tick(event.getServer()); // logs/joinedthegame-bots.json (testing jar only)
         if (event.getServer().getTickCount() % 20 == 0) {
             for (ServerPlayer player : event.getServer().getPlayerList().getPlayers()) PlayerActivity.sample(player);
         }
@@ -83,6 +84,24 @@ public final class JtgEvents {
         }
     }
 
+    /** A blow aimed at someone's pet (a sweep doesn't fire this: only the one you aimed at). */
+    @SubscribeEvent
+    static void onAttackPet(AttackEntityEvent event) {
+        if (event.getTarget() instanceof net.minecraft.world.entity.TamableAnimal pet && pet.isTame()) {
+            net.joinedthegame.ai.social.PetKills.hit(pet, event.getEntity());
+        }
+    }
+
+    /** Something someone shot at a pet. */
+    @SubscribeEvent
+    static void onPetHurt(LivingIncomingDamageEvent event) {
+        if (event.getEntity() instanceof net.minecraft.world.entity.TamableAnimal pet && pet.isTame()
+                && event.getSource().getDirectEntity() instanceof net.minecraft.world.entity.projectile.Projectile
+                && event.getSource().getEntity() instanceof net.minecraft.world.entity.player.Player shooter) {
+            net.joinedthegame.ai.social.PetKills.hit(pet, shooter);
+        }
+    }
+
     @SubscribeEvent
     static void onAttack(AttackEntityEvent event) {
         if (!(event.getTarget() instanceof BotPlayer bot) || !(event.getEntity() instanceof ServerPlayer player)) return;
@@ -93,6 +112,26 @@ public final class JtgEvents {
         if (brain != null) brain.onPunched(bot, player);
     }
 
+    /**
+     * A sword sweep starting (see Sweeps). Bots mostly don't sweep with someone stood by what
+     * they're hitting, but the careless and the reckless don't always look first. Every sweep
+     * that goes ahead is noted, so whoever it catches can tell it wasn't aimed at them.
+     */
+    @SubscribeEvent
+    static void onSweep(net.neoforged.neoforge.event.entity.player.SweepAttackEvent event) {
+        var attacker = event.getEntity();
+        if (!event.isSweeping() || attacker.level().isClientSide()) return;
+        if (attacker instanceof BotPlayer bot && net.joinedthegame.ai.Sweeps.bystanders(bot, event.getTarget())) {
+            BotBrain brain = BotManager.get(bot.level().getServer()).brain(bot.getUUID());
+            double careless = brain == null ? 0.05 : 0.02 + brain.personality().reckless() * 0.12 + (1 - brain.personality().diligent()) * 0.06;
+            if (bot.getRandom().nextDouble() >= careless) {
+                event.setSweeping(false);
+                return;
+            }
+        }
+        net.joinedthegame.ai.Sweeps.note(attacker, event.getTarget());
+    }
+
     @SubscribeEvent
     static void onHurt(LivingIncomingDamageEvent event) {
         if (!(event.getEntity() instanceof BotPlayer bot)) return;
@@ -100,9 +139,83 @@ public final class JtgEvents {
         if (brain != null) brain.onHurt(bot, event.getSource().getEntity(), event.getAmount());
     }
 
+    /**
+     * A bot picked up something a real player threw: a gift. What it's worth to the bot depends on
+     * what it is (the good stuff, food when it's hungry, anything useful; junk is nothing).
+     */
+    @SubscribeEvent
+    static void onPickup(net.neoforged.neoforge.event.entity.player.ItemEntityPickupEvent.Post event) {
+        if (!(event.getPlayer() instanceof BotPlayer bot)) return;
+        if (!(event.getItemEntity().getOwner() instanceof ServerPlayer giver) || giver == bot) return;
+        // A bot's throw is a gift only if it was meant for us (bots also throw junk away).
+        boolean meant = giver instanceof BotPlayer && giver.getUUID().equals(net.joinedthegame.ai.social.Gifts.pickedUp(event.getItemEntity(), bot.getUUID()));
+        if (giver instanceof BotPlayer && !meant) return;
+        BotBrain brain = BotManager.get(bot.level().getServer()).brain(bot.getUUID());
+        if (brain == null) return;
+        var stack = event.getOriginalStack();
+        double worth;
+        if (net.joinedthegame.ai.Junk.isValuable(stack)) worth = 6;
+        else if (stack.has(net.minecraft.core.component.DataComponents.FOOD) && bot.getFoodData().getFoodLevel() < 16) worth = 4;
+        else if (net.joinedthegame.ai.Junk.isKeeper(stack)) worth = 2;
+        else if (meant && (stack.is(net.minecraft.tags.BlockItemTags.FLOWERS.item()) || stack.is(net.minecraft.tags.BlockItemTags.SMALL_FLOWERS.item()))) worth = 3;
+        else return; // junk: no thanks, and no hard feelings either
+        worth *= Math.min(2.0, 1.0 + stack.getCount() / 16.0);
+        brain.feel(giver, net.joinedthegame.ai.social.Feelings.Act.GAVE_ME, worth);
+    }
+
+    /**
+     * Which players each mob has gone for lately (mob, then who and when). A mob turns on whoever
+     * hits it, so at the moment a defender kills it, it's after the defender, not the one it was
+     * attacking: this is how the one who was saved still knows it.
+     */
+    private static final java.util.Map<UUID, java.util.Map<UUID, Long>> WENT_FOR = new java.util.concurrent.ConcurrentHashMap<>();
+
+    @SubscribeEvent
+    static void onTarget(net.neoforged.neoforge.event.entity.living.LivingChangeTargetEvent event) {
+        if (event.getEntity() instanceof net.minecraft.world.entity.TamableAnimal pet && pet.isTame()
+                && event.getNewAboutToBeSetTarget() instanceof net.minecraft.world.entity.player.Player who) {
+            net.joinedthegame.ai.social.PetKills.wentFor(pet, who);
+        }
+        if (!(event.getNewAboutToBeSetTarget() instanceof BotPlayer target)) return;
+        if (!(event.getEntity() instanceof net.minecraft.world.entity.monster.Enemy)) return;
+        WENT_FOR.computeIfAbsent(event.getEntity().getUUID(), k -> new java.util.concurrent.ConcurrentHashMap<>())
+                .put(target.getUUID(), event.getEntity().level().getGameTime());
+    }
+
     /** A bot killed something: worth remembering. */
     @SubscribeEvent
     static void onKill(net.neoforged.neoforge.event.entity.living.LivingDeathEvent event) {
+        // Someone killed a mob that was going for a bot (now, or in the last fifteen seconds): the
+        // bot's grateful. Not for killing what was only after the killer itself.
+        var went = WENT_FOR.remove(event.getEntity().getUUID());
+        if (event.getEntity() instanceof net.minecraft.world.entity.Mob mob
+                && event.getSource().getEntity() instanceof net.minecraft.world.entity.player.Player helper) {
+            var victims = new java.util.HashSet<UUID>();
+            long now = mob.level().getGameTime();
+            if (went != null) went.forEach((id, at) -> { if (now - at < 20 * 15) victims.add(id); });
+            if (mob.getTarget() instanceof BotPlayer t) victims.add(t.getUUID());
+            victims.remove(helper.getUUID());
+            for (UUID id : victims) {
+                BotBrain victimBrain = BotManager.get(mob.level().getServer()).brain(id);
+                if (victimBrain != null) victimBrain.feel(helper, net.joinedthegame.ai.social.Feelings.Act.HELPED_ME, 1);
+            }
+        }
+        if (WENT_FOR.size() > 500) WENT_FOR.clear(); // mobs that went for someone and wandered off
+        // Someone's pet killed by a person: on purpose or not, the owner (if a bot) reacts.
+        if (event.getEntity() instanceof net.minecraft.world.entity.TamableAnimal pet && pet.isTame()
+                && event.getSource().getEntity() instanceof net.minecraft.world.entity.player.Player petKiller) {
+            net.joinedthegame.ai.social.PetKills.died(pet, petKiller);
+        }
+        // A bot killed a person (bot or player): it knows (it won, and where their stuff is).
+        // (Knocked off a ledge, into lava, into the water by them counts too: the game's own kill
+        // credit, "doomed to fall by LeBronJames". Only counting the killing blow, a bot that won
+        // that way didn't know it had, and didn't go for the loot.)
+        if (event.getEntity() instanceof net.minecraft.world.entity.player.Player victim
+                && (event.getSource().getEntity() != null ? event.getSource().getEntity() : victim.getKillCredit()) instanceof BotPlayer killer
+                && killer != victim) {
+            BotBrain kb = BotManager.get(killer.level().getServer()).brain(killer.getUUID());
+            if (kb != null) kb.onKilledPerson(victim.getUUID(), victim.blockPosition());
+        }
         if (event.getEntity() instanceof net.minecraft.world.entity.animal.wolf.Wolf wolf && wolf.isTame()
                 && wolf.getOwner() instanceof BotPlayer owner) {
             BotBrain ownerBrain = BotManager.get(owner.level().getServer()).brain(owner.getUUID());
@@ -114,6 +227,33 @@ public final class JtgEvents {
         if (brain == null || !(event.getEntity() instanceof net.minecraft.world.entity.monster.Enemy)) return;
         brain.remember(net.joinedthegame.ai.BotMemory.EventType.KILLED,
                 net.minecraft.core.registries.BuiltInRegistries.ENTITY_TYPE.getKey(event.getEntity().getType()).toString());
+    }
+
+    /**
+     * Peace by chat. A bot called peace on you: "peace", "truce", "ok", "fine", "sure", "yes" to
+     * accept, "no" to refuse (saying nothing is a no, after a while). Or you call it: say "peace"
+     * or "truce" near a bot you're fighting, and it answers.
+     */
+    @SubscribeEvent
+    static void onChat(net.neoforged.neoforge.event.ServerChatEvent event) {
+        ServerPlayer player = event.getPlayer();
+        if (player instanceof BotPlayer) return;
+        String said = event.getRawText().toLowerCase(java.util.Locale.ROOT).trim();
+        long now = player.level().getGameTime();
+        var offer = net.joinedthegame.ai.social.Peace.offerTo(player.getUUID(), now);
+        if (offer != null) {
+            boolean yes = said.matches(".*\\b(peace|truce|ok|okay|fine|sure|yes|deal)\\b.*");
+            boolean no = said.matches(".*\\b(no|nope|never|nah)\\b.*");
+            if (yes || no) net.joinedthegame.ai.social.Peace.answer(offer, yes && !no, now);
+            return;
+        }
+        if (!said.matches(".*\\b(peace|truce)\\b.*")) return;
+        // Calling it ourselves: to the bots fighting us, close by.
+        for (UUID id : net.joinedthegame.ai.social.Feuds.against(player.getUUID(), now)) {
+            if (player.level().getPlayerByUUID(id) instanceof BotPlayer bot && bot.distanceToSqr(player) < 32 * 32) {
+                net.joinedthegame.ai.social.Peace.offer(player.getUUID(), player.getGameProfile().name(), id, now);
+            }
+        }
     }
 
     @SubscribeEvent
@@ -165,6 +305,7 @@ public final class JtgEvents {
     @SubscribeEvent
     static void onStopped(ServerStoppedEvent event) {
         BotManager.reset();
+        DebugLog.close();
         PlayerActivity.clear();
         Recipes.clear();
         CROUCHING.clear();

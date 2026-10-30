@@ -142,7 +142,7 @@ public final class RaidProject implements Task {
             return true;
         }
         Direction face = Direction.getApproximateNearest(bot.getEyePosition().subtract(Vec3.atCenterOf(vault)));
-        boolean used = Placer.useOn(bot, vault, face, s -> s.is(Items.TRIAL_KEY) || s.is(Items.OMINOUS_TRIAL_KEY));
+        boolean used = Placer.useOn(bot, vault, face, s -> s.is(Items.TRIAL_KEY) || s.is(Items.OMINOUS_TRIAL_KEY), false);
         brain.blacklist(vault); // one go per vault (each only opens once per player anyway)
         if (used) {
             brain.markLooted(vault);

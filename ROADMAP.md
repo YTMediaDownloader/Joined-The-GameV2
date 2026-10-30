@@ -113,12 +113,12 @@
 - Proper chest placement: double chests.
 - More intelligent furniture layouts.
 
-### v0.7.2: Large Homes, Names & Personality
+### v0.7.2: Large Homes, Names & Personality *(done)*
 - Fixes from testing 0.7.1.
 - A naming/personality update (details to come).
 - A two-storey house, bigger storage rooms, richer interiors; maybe personality/biome variants.
 
-### v0.7.3: Trial Chambers & Mace *(was planned for 0.7.0)*
+### v0.7.3: Trial Chambers & Mace *(done)*
 - Deep Trial Chamber logic: go back to remembered chambers, fight trial spawners, know when a
   wave is done, collect trial keys, find vaults, use keys correctly, remember which
   vaults/sections are done.
@@ -126,6 +126,12 @@
 - Mace loot obtained legitimately; basic mace combat (falling smash attacks, no fancy movement yet).
 - Better ranged/melee choice in trial chambers.
 - Structure states: discovered, partly explored, raided, exhausted.
+
+### v0.7.4: Trial Chamber fixes *(done)*
+- Vaults that actually open (no crouching, standing inside the vault's range, seeing any face),
+  vaults opened between trials, locked vaults remembered and gone back to with the right key.
+- Runs that start, and keep going through worn-out tools, other goals giving up and restarts.
+- No running from mobs in a puddle; hiding that isn't working is given up on.
 
 ### v0.7.x: Enchanting & Chamber Polish
 - Fix the inevitable funny problems from 0.7.0.
@@ -135,15 +141,74 @@
 - Tune mace combat so they don't become professional fall-damage victims.
 - Maybe wind charges once normal mace combat is stable.
 
-### v0.8.0: Brewing, Netherite & Advanced Preparation
-- Full brewing: build and remember brewing stands, gather nether wart and ingredients, know the
-  useful recipes, carry situational potions and know when to drink them (fire resistance for
+### v0.8.0: Netherite *(done)*
+- Search for ancient debris on purpose, mine it safely, smelt scrap, keep enough gold, craft
+  ingots, get the smithing template, use smithing tables, and upgrade valuable enchanted diamond
+  gear rather than replacing it. Netherite is late-game gear, not just another ore.
+
+### Later: Maps & Treasure
+- Read buried treasure maps (the X is stored on the map), travel there, dig down to the chest
+  (sand, gravel, underwater ones too); explorer maps to monuments and mansions; maps in general.
+
+### v0.8.1: Brewing
+- Build and remember brewing stands, gather nether wart and ingredients, know the useful
+  recipes, carry situational potions and know when to drink them (fire resistance for
   nether/lava trips, healing/regeneration for raids, strength for big fights, slow falling for
   the End, night vision for exploring).
-- Full netherite: search for ancient debris on purpose, mine it safely, smelt scrap, keep enough
-  gold, craft ingots, get the smithing template, use smithing tables, and upgrade valuable
-  enchanted diamond gear rather than replacing it. Netherite is late-game gear, not just another ore.
+
+### v0.8.2: Expedition Preparation
 - Proper expedition prep: food, arrows, blocks, spare tools, potions, totem, ranged weapon, armour.
+
+## Current direction (decided 2026-10-11)
+1.0 is far future. The focus now: **bugs, then a goal-system overhaul, then relationships.**
+The big problem found in play: bots are too repetitive. They do the same things in the same
+order, even when the project names differ.
+
+### v0.8.x: Bug fixes
+- Fix what turns up in play (and verify the untested bits of 0.8.0: bastion raids, template copies,
+  shipwreck chests).
+
+### v0.9.0: Goal system overhaul + relationships (the biggest update yet)
+Updated 2026-10-12: relationships come in 0.9.0 alongside the overhaul, not after it.
+- **More personal goals, and variations of each** (old ones included), so two bots on "the same"
+  project still do it differently. Overhaul the core parts of the mod to feel more realistic.
+- **Relationships** (see below), including **romance**: bots can fall in love. Each bot has an
+  orientation (straight, gay or lesbian), and that's as far as sexuality goes. Trans bots are a
+  possible later feature, the user's call, not now.
+
+- **Roster overhaul:** more celebrities, famous people and Minecraft YouTubers. The random
+  gamertag names are phased out, except the ones that became regulars: TorchBearer99,
+  AxolotlAndy, BedrockBenny and MudMuncher. YouTubers with real accounts wear their real
+  skins (fetched, like DanTDM); people without an account get a skin drawn for the mod (like
+  MadisonBeer). Each gets a personality preset.
+
+#### The goal system (living, not looping)
+- **Needs instead of a ladder:** drives (safety, hunger, gear, wealth, home, curiosity, social,
+  creativity...) that rise and fall; personality sets how much each matters; activities are scored
+  by the needs they meet. No more single wooden→stone→iron→diamond script for everyone, and no
+  "nothing else until full iron" lock-out.
+- **Weighted choice, not always the max:** similar bots in similar spots still do different things.
+- **Boredom and novelty:** repeating the same kind of thing gets less appealing; new things and
+  favourites pull.
+- **Many roads to the same need:** iron from mining, caves, mineshafts, shipwrecks, trading, golems;
+  food from hunting, farming, fishing, trading, village farms.
+- **Commitment: knowing when NOT to interrupt** (the lesson of 0.8.1, where most bugs were two goals
+  undoing each other). Every activity has a cost to interrupt that grows with progress made; a
+  new idea has to beat the current one by more than that, not just score higher. Interruptions are
+  decided before taking over, never by taking over and then quitting. A task that is interrupted
+  resumes where it was. Emergencies still cut through everything.
+- **A plan for the day,** with spontaneous detours when something interesting turns up.
+- **Hard rule: survival is never optional.** Emergencies (a fight, starving, drowning, burning, lava,
+  caught out at night unprepared) are hard overrides above the needs system, exactly as now. Needs
+  and boredom only choose between normal activities; a bot can't be too creative to eat.
+
+#### Relationships
+- Who they've met, friends and rivals, helping each other; built on the new goal system so it
+  changes what they choose to do (and, later, co-op and willingness to share).
+- Romance: attraction that grows from time spent together, falling in love, couples who stick
+  together (share a home, do things together). Orientation decides who can fall for whom.
+
+---
 
 ### v0.8.x: Bases & Property Overhaul
 - Several house blueprints, not everyone ending up in the same cabin. Styles by

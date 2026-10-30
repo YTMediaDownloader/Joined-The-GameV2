@@ -63,7 +63,18 @@ public final class HomeGoal extends Goal {
         if (Inv.pickaxeTier(bot) < 1) return 0;
         // A nomad carries its bed and puts it down wherever it is at night: no home to make.
         if (this.brain.roaming(bot) && Inv.count(bot, s -> s.is(ItemTags.BEDS)) > 0) return 0;
+        // Night, and not geared for it: no house-hunting on the surface. It used to climb out of
+        // the hole it had dug for the night, get sent back down, climb out again... all night.
+        // (Well underground already, it can make a home right there.)
+        if (bot.level().isDarkOutside() && !ShelterGoal.nightReady(bot) && !deepDown(bot)) return 0;
         return 45;
+    }
+
+    /** Properly underground: a good way below the surface overhead. */
+    private static boolean deepDown(BotPlayer bot) {
+        var feet = bot.blockPosition();
+        int surface = bot.level().getHeight(net.minecraft.world.level.levelgen.Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, feet.getX(), feet.getZ());
+        return feet.getY() <= surface - 8;
     }
 
     @Override
@@ -92,19 +103,29 @@ public final class HomeGoal extends Goal {
             if (status == Task.Status.RUNNING) return true;
             this.task.stop(bot, this.brain);
             this.brain.log("home task '" + this.task.activity() + "' " + status);
+            boolean wool = this.task instanceof WoolTask;
             this.task = null;
             if (status == Task.Status.FAILED) {
-                cooldown(this.brain.now(), 20 * 90);
+                // No sheep about (ten bots have hunted the place out, say): don't come straight
+                // back to it every minute and a half; leave it longer each time it comes to nothing.
+                int wait = 20 * 90;
+                if (wool) wait = Math.min(20 * 60 * 20, wait << Math.min(4, this.woolFails++));
+                cooldown(this.brain.now(), wait);
                 return false;
             }
+            if (wool) this.woolFails = 0;
             return true;
         }
         return decide(bot);
     }
 
+    /** Sheep hunts in a row that came to nothing (each one waits longer before the next). */
+    private int woolFails;
+
     private boolean decide(BotPlayer bot) {
         // 1. A free bed nearby: take it.
-        BlockPos bed = Homes.findFreeBed(bot.level(), bot.blockPosition(), SEARCH_RADIUS, this.brain::isBlacklisted);
+        BlockPos bed = Homes.findFreeBed(bot.level(), bot.blockPosition(), SEARCH_RADIUS, p -> this.brain.isBlacklisted(p)
+                || this.brain.memory().nearest("exs_house", net.minecraft.core.GlobalPos.of(bot.level().dimension(), p), 12) != null);
         if (bed != null) {
             this.claiming = bed;
             this.brain.log("going to claim the bed at " + bed.toShortString());

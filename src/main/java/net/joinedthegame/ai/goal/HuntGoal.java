@@ -69,9 +69,12 @@ public final class HuntGoal extends Goal {
         return Inv.count(bot, s -> Inv.isFood(s) && !Inv.isBadFood(s) && !Inv.isRawMeat(s));
     }
 
-    /** Bread we could bake from what we're carrying (3 wheat each; a hay bale is 3 bread). */
+    /**
+     * Bread we could bake from what we're carrying (3 wheat each; a hay bale is 3 bread). Four
+     * wheat always kept back: that's what cows and sheep follow, and what they breed on.
+     */
     private static int potentialBread(BotPlayer bot) {
-        return Inv.count(bot, Items.WHEAT) / 3 + Inv.count(bot, Items.HAY_BLOCK) * 3;
+        return Math.max(0, Inv.count(bot, Items.WHEAT) - 4) / 3 + Inv.count(bot, Items.HAY_BLOCK) * 3;
     }
 
     private static int raw(BotPlayer bot) {
@@ -94,7 +97,7 @@ public final class HuntGoal extends Goal {
         long now = this.brain.now();
         this.unreachable.values().removeIf(until -> until < now);
         List<Animal> animals = Senses.entitiesNear(bot, Animal.class, 28,
-                a -> isMeatAnimal(a) && !this.unreachable.containsKey(a.getUUID()));
+                a -> isMeatAnimal(a) && !this.unreachable.containsKey(a.getUUID()) && Senses.wouldNotice(bot, a));
         for (Animal a : animals) {
             if (desperate) return a;
             long sameKind = animals.stream().filter(o -> o.getType() == a.getType()).count();
@@ -149,7 +152,11 @@ public final class HuntGoal extends Goal {
         this.prey = null;
         this.hunted = false;
         this.roaming = false;
+        this.triedChests = false;
     }
+
+    /** Looked in the chests at home for food this time round already. */
+    private boolean triedChests;
 
     // --- tick ----------------------------------------------------------------------------
 
@@ -227,6 +234,17 @@ public final class HuntGoal extends Goal {
             this.prey = next;
             this.hunted = false;
             return true;
+        }
+
+        // Food put away at home (or in the stash): go and get it before wandering off hungry.
+        if (meals + raw + potentialBread(bot) < 3 && !this.triedChests) {
+            this.triedChests = true;
+            Task fetch = net.joinedthegame.ai.task.FetchTask.fromStash(bot, this.brain,
+                    s -> Inv.isFood(s) && !Inv.isBadFood(s), 16, "Getting food from my chests");
+            if (fetch != null) {
+                this.task = fetch;
+                return true;
+            }
         }
 
         // Nothing around and we really need food: go look (wheat on us counts).

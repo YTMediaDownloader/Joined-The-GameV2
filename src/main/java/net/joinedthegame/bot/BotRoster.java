@@ -27,9 +27,9 @@ public final class BotRoster extends SavedData {
 
     private BotRoster(List<BotRecord> list) {
         for (BotRecord record : list) add(record);
-        // Names added in later versions (the real players): on the list, ready to invite.
+        // Names added in later versions (the real players and people): on the list, ready to invite.
         for (String name : BotNames.DEFAULT) {
-            if (BotNames.REAL_SKINS.contains(name.toLowerCase(Locale.ROOT)) && get(name) == null) add(BotRecord.create(name));
+            if (BotNames.isFeatured(name) && get(name) == null) add(BotRecord.create(name));
         }
     }
 

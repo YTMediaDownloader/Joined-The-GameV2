@@ -114,6 +114,14 @@ public final class Junk {
                 case DECORATE -> {
                     if (s.is(net.minecraft.tags.BlockItemTags.SMALL_FLOWERS.item()) || s.is(Items.TORCH) || s.is(ItemTags.SAPLINGS)) return 64;
                 }
+                case NETHERITE -> {
+                    // The netherite kit: everything on the way to an ingot, the template, the gold,
+                    // the nether trip's things and the smithing table.
+                    if (s.is(Items.ANCIENT_DEBRIS) || s.is(Items.NETHERITE_SCRAP) || s.is(Items.NETHERITE_INGOT)
+                            || s.is(Items.NETHERITE_UPGRADE_SMITHING_TEMPLATE) || s.is(Items.GOLD_INGOT) || s.is(Items.RAW_GOLD)
+                            || s.is(Items.NETHERRACK) || s.is(Items.DIAMOND) || s.is(Items.SMITHING_TABLE)
+                            || s.is(Items.FLINT_AND_STEEL) || s.is(Items.GOLDEN_HELMET) || s.is(Items.OBSIDIAN)) return 64;
+                }
                 default -> {
                 }
             }
@@ -174,7 +182,10 @@ public final class Junk {
                 || stack.is(Items.OMINOUS_BOTTLE) || stack.is(Items.HEAVY_CORE) || stack.is(Items.MUSIC_DISC_PRECIPICE)
                 || stack.is(Items.MUSIC_DISC_CREATOR) || stack.is(Items.MUSIC_DISC_CREATOR_MUSIC_BOX)
                 || stack.is(Items.FLOW_BANNER_PATTERN) || stack.is(Items.GUSTER_BANNER_PATTERN)
-                || stack.is(Items.FLOW_ARMOR_TRIM_SMITHING_TEMPLATE) || stack.is(Items.BOLT_ARMOR_TRIM_SMITHING_TEMPLATE);
+                || stack.is(Items.FLOW_ARMOR_TRIM_SMITHING_TEMPLATE) || stack.is(Items.BOLT_ARMOR_TRIM_SMITHING_TEMPLATE)
+                // Netherite, every step of the way there.
+                || stack.is(Items.ANCIENT_DEBRIS) || stack.is(Items.NETHERITE_SCRAP) || stack.is(Items.NETHERITE_INGOT)
+                || stack.is(Items.NETHERITE_BLOCK) || stack.is(Items.NETHERITE_UPGRADE_SMITHING_TEMPLATE);
     }
 
     /** Weapons that don't say so on the tin (spears have no weapon component, unlike swords). */

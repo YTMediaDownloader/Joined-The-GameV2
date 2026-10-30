@@ -11,6 +11,7 @@ import net.joinedthegame.bot.BotPlayer;
 import net.minecraft.core.BlockPos;
 import net.minecraft.util.Mth;
 import net.minecraft.world.level.block.FallingBlock;
+import net.minecraft.world.phys.Vec3;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -85,6 +86,9 @@ public final class HideTask implements Task {
     private boolean pillared;
     private final java.util.Set<BlockPos> boxSkipped = new java.util.HashSet<>();
     private int boxTries;
+    /** Tries at the lid, and whether it's turned out not to go on here at all. */
+    private int sealTries;
+    private boolean noLid;
 
     @Override
     public String activity() {
@@ -103,10 +107,12 @@ public final class HideTask implements Task {
     public static boolean isHidden(BotPlayer bot) {
         WorldView w = new WorldView(bot.level());
         BlockPos feet = Navigator.feet(bot);
-        if (w.passable(feet.above(2))) return false;
+        // Real cover all round and overhead: a pond or a bush beside you isn't a wall, and leaves
+        // over your head aren't a roof (bots stood at the edge of a lake under a tree "hiding").
+        if (!w.cover(feet.above(2))) return false;
         int walls = 0;
         for (var d : net.minecraft.core.Direction.Plane.HORIZONTAL) {
-            if (!w.passable(feet.relative(d)) && !w.passable(feet.relative(d).above())) walls++;
+            if (w.cover(feet.relative(d)) && w.cover(feet.relative(d).above())) walls++;
         }
         return walls >= 4;
     }
@@ -116,6 +122,24 @@ public final class HideTask implements Task {
         if (++this.ticks > 20 * 60 * 10) return Status.DONE;
         WorldView w = new WorldView(bot.level());
         BlockPos feet = Navigator.feet(bot);
+        // About to dig in beside water (a pond, a river bank): it would flood, or leave a side open
+        // to the water. Find dry ground a few steps off first (bots "hid" at the edge of a lake).
+        if (this.stage == Stage.DIG && this.top == null && !isHidden(bot)) {
+            if (this.dryTicks == 0 && !dryColumn(w, feet)) {
+                this.drySpot = findDry(w, feet);
+                if (this.drySpot != null) brain.log("not digging in beside water: moving to " + this.drySpot.toShortString());
+            }
+            BlockPos dry = this.drySpot;
+            if (dry != null && ++this.dryTicks < 20 * 15 && !feet.equals(dry)) {
+                Navigator nav = brain.navigator();
+                if (!nav.isMoving()) nav.moveTo(bot, Vec3.atBottomCenterOf(dry), dry::equals);
+                if (nav.status() != Navigator.Status.FAILED) {
+                    brain.debug = "hide: to dry ground " + dry.toShortString();
+                    return Status.RUNNING;
+                }
+            }
+            this.drySpot = null;
+        }
         brain.navigator().stop(bot);
         if (isHidden(bot) && this.stage != Stage.WAIT) {
             this.stage = Stage.WAIT;
@@ -137,6 +161,7 @@ public final class HideTask implements Task {
             return Status.RUNNING;
         }
 
+        brain.debug = "hide " + this.stage + " from " + top.toShortString();
         switch (this.stage) {
             case DIG -> {
                 int bottom = top.getY() - DEPTH;
@@ -175,7 +200,15 @@ public final class HideTask implements Task {
                 centre(bot, brain.controls(), top);
                 if (!bot.onGround()) return Status.RUNNING;
                 if (Inv.scaffoldCount(bot) == 0) return Status.FAILED;
-                Placer.place(bot, cap, Inv.scaffold(bot));
+                // A lid with nothing beside it to rest against (a hole only two deep on flat
+                // ground: the lid's cell is level with the open ground) never goes on. It used
+                // to try for ever, the bot frozen in its hole. Two seconds, then make do.
+                if (!Placer.place(bot, cap, Inv.scaffold(bot)) && ++this.sealTries > 40) {
+                    this.sealTries = 0;
+                    this.noLid = true;
+                    this.stage = Stage.WAIT;
+                    this.waitSpot = feet;
+                }
             }
             case PILLAR -> {
                 // Can't dig here: get up out of reach instead.
@@ -231,7 +264,8 @@ public final class HideTask implements Task {
                     this.top = null;
                     this.waitSpot = null;
                     this.pillared = false;
-                } else if (!this.pillared && w.passable(feet.above(2)) && Inv.scaffoldCount(bot) > 0) {
+                    this.noLid = false;
+                } else if (!this.pillared && !this.noLid && w.passable(feet.above(2)) && Inv.scaffoldCount(bot) > 0) {
                     this.stage = Stage.SEAL;
                 }
                 return Status.RUNNING;
@@ -262,9 +296,46 @@ public final class HideTask implements Task {
         controls.sprint = false;
     }
 
+    private @Nullable BlockPos drySpot;
+    private int dryTicks;
+
+    /** A hole here would have no water beside it, all the way down. */
+    private static boolean dryColumn(WorldView w, BlockPos top) {
+        for (int dy = 0; dy >= -DEPTH; dy--) {
+            BlockPos p = top.offset(0, dy, 0);
+            for (var d : net.minecraft.core.Direction.Plane.HORIZONTAL) {
+                BlockPos n = p.relative(d);
+                if (w.isWater(n) || w.isLava(n)) return false;
+            }
+        }
+        return true;
+    }
+
+    /** The nearest spot within a few blocks we can stand on and dig a dry hole. */
+    private static @Nullable BlockPos findDry(WorldView w, BlockPos from) {
+        BlockPos best = null;
+        double bestD = Double.MAX_VALUE;
+        for (int dx = -8; dx <= 8; dx++) {
+            for (int dz = -8; dz <= 8; dz++) {
+                for (int dy = -2; dy <= 2; dy++) {
+                    BlockPos p = from.offset(dx, dy, dz);
+                    double d = dx * dx + dz * dz + dy * dy;
+                    if (d >= bestD || !w.standable(p) || !dryColumn(w, p)) continue;
+                    if (!w.breakable(p.below()) || w.isWater(p.below(2))) continue;
+                    best = p;
+                    bestD = d;
+                }
+            }
+        }
+        return best;
+    }
+
     private static boolean canDigDown(WorldView w, BlockPos below) {
         if (!w.breakable(below)) return false;
         if (w.isWater(below.below()) || w.isLava(below.below())) return false;
+        for (var d : net.minecraft.core.Direction.Plane.HORIZONTAL) {
+            if (w.isWater(below.relative(d)) || w.isLava(below.relative(d))) return false; // it'd flood
+        }
         // Never dig into a drop we can't climb back out of.
         return w.solidFloor(below.below()) || w.breakable(below.below());
     }

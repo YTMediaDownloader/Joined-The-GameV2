@@ -4,10 +4,14 @@
   "package": "net.joinedthegame.mixin",
   "compatibilityLevel": "JAVA_21",
   "mixins": [
+    "FishingHookAccessor",
     "PlayerListMixin",
     "SleepStatusMixin"
   ],
-  "client": [],
+  "client": [
+    "IntegratedServerMixin",
+    "PlayerInfoMixin"
+  ],
   "injectors": {
     "defaultRequire": 1
   }

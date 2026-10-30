@@ -25,7 +25,7 @@ public final class Storage {
     public static List<BlockPos> chests(BotPlayer bot, BotBrain brain) {
         GlobalPos home = brain.record().home();
         if (home == null || home.dimension() != bot.level().dimension() || !bot.level().isLoaded(home.pos())) return List.of();
-        List<BlockPos> out = new ArrayList<>(Homes.storageNear(bot.level(), home.pos()));
+        List<BlockPos> out = new ArrayList<>(Homes.storageOf(bot.level(), brain.record()));
         BotManager manager = BotManager.get(bot.level().getServer());
         out.removeIf(p -> manager.isStash(bot.level(), p) || brain.isBlacklisted(p));
         return out;

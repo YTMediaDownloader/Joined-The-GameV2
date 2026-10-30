@@ -31,6 +31,10 @@ public final class CraftTask implements Task {
     private @Nullable BlockPos table;
     private int ticks;
     private int useTicks;
+    /** We put this table down ourselves (and, away from home, take it back after). */
+    private boolean placedOwn;
+    private boolean crafted;
+    private @Nullable CollectItems collect;
 
     public CraftTask(Planner.Craft step) {
         this.step = step;
@@ -43,7 +47,8 @@ public final class CraftTask implements Task {
 
     @Override
     public Status tick(BotPlayer bot, BotBrain brain) {
-        if (++this.ticks > 20 * 60) return Status.FAILED;
+        if (++this.ticks > 20 * 60) return this.crafted ? Status.DONE : Status.FAILED;
+        if (this.crafted) return takeTableBack(bot, brain);
         if (!this.step.option().needsTable()) return craftAfterDelay(bot, brain, null);
 
         if (this.table == null || !bot.level().getBlockState(this.table).is(net.minecraft.world.level.block.Blocks.CRAFTING_TABLE)) {
@@ -56,11 +61,23 @@ public final class CraftTask implements Task {
                     if (!(make instanceof Planner.Craft craft) || !craftNow(bot, craft)) return Status.FAILED;
                 }
                 BlockPos spot = findPlacementSpot(bot);
+                if (spot == null) {
+                    // Hemmed in: dig a nook in the wall and set it there.
+                    if (this.nook == null) this.nook = findNook(bot);
+                    if (this.nook != null && !bot.level().getBlockState(this.nook).isAir()) {
+                        if (!this.nook.equals(brain.breaker().target())) brain.breaker().start(this.nook);
+                        if (brain.breaker().tick(bot, brain.controls()) == BlockBreaker.Result.FAILED) this.nook = null;
+                        return Status.RUNNING;
+                    }
+                    spot = this.nook;
+                    this.nook = null;
+                }
                 if (spot == null || !Placer.place(bot, spot, s -> s.is(Items.CRAFTING_TABLE))) {
                     brain.log("craft: couldn't place table at " + spot);
                     return Status.FAILED;
                 }
                 this.table = spot;
+                this.placedOwn = true;
             }
         }
         if (!BlockBreaker.canUse(bot, this.table)) {
@@ -78,8 +95,50 @@ public final class CraftTask implements Task {
             return Status.RUNNING;
         }
         brain.navigator().stop(bot);
-        brain.rememberPlace(bot, "crafting_table", this.table);
-        return craftAfterDelay(bot, brain, this.table);
+        Status status = craftAfterDelay(bot, brain, this.table);
+        // Our own table, put down out in the field: pick it back up, like anyone would. Left
+        // behind, the next broken pickaxe down a mine finds the bot with no table and no wood.
+        if (status == Status.DONE && this.placedOwn && !nearHome(bot, brain, this.table)) {
+            // The scatterbrained ones sometimes just walk off without it.
+            var p = brain.personality();
+            double forgetful = (1 - p.diligent()) * 0.5 + (1 - p.hoarder()) * 0.2;
+            if (bot.getRandom().nextDouble() < forgetful * 0.4) {
+                brain.log("walked off and left my crafting table behind at " + this.table.toShortString());
+                brain.rememberPlace(bot, "crafting_table", this.table);
+                return Status.DONE;
+            }
+            this.crafted = true;
+            return Status.RUNNING;
+        }
+        if (status == Status.DONE) brain.rememberPlace(bot, "crafting_table", this.table);
+        return status;
+    }
+
+    private static boolean nearHome(BotPlayer bot, BotBrain brain, BlockPos pos) {
+        var home = brain.record().home();
+        return home != null && home.dimension() == bot.level().dimension() && home.pos().closerThan(pos, 24);
+    }
+
+    private Status takeTableBack(BotPlayer bot, BotBrain brain) {
+        if (this.collect != null) {
+            return this.collect.tick(bot, brain) == Status.RUNNING ? Status.RUNNING : Status.DONE;
+        }
+        BlockPos at = this.table;
+        if (at == null) return Status.DONE;
+        if (!bot.level().getBlockState(at).is(net.minecraft.world.level.block.Blocks.CRAFTING_TABLE) || !BlockBreaker.inReach(bot, at)) {
+            this.collect = new CollectItems(at, 3, 40);
+            return Status.RUNNING;
+        }
+        brain.breaker().start(at);
+        BlockBreaker.Result result = brain.breaker().tick(bot, brain.controls());
+        if (result == BlockBreaker.Result.FAILED) return Status.DONE; // leave it, then
+        if (result == BlockBreaker.Result.DONE) this.collect = new CollectItems(at, 3, 40);
+        return Status.RUNNING;
+    }
+
+    @Override
+    public void stop(BotPlayer bot, BotBrain brain) {
+        if (this.crafted && this.collect == null) brain.breaker().cancel(bot);
     }
 
     private Status craftAfterDelay(BotPlayer bot, BotBrain brain, @Nullable BlockPos at) {
@@ -88,7 +147,16 @@ public final class CraftTask implements Task {
         if (this.useTicks < 12) return Status.RUNNING;
         for (int i = 0; i < this.step.times(); i++) {
             if (!craftOnce(bot)) {
-                if (i == 0) brain.log("craft: recipe didn't match the chosen items " + this.step.grid());
+                if (i == 0) {
+                    // Usually not a bad recipe: the step was planned before something else came
+                    // first (building, a chest, a death) and what it needed is gone. Re-plan.
+                    boolean missing = false;
+                    for (Item item : this.step.grid()) {
+                        if (item != null && Inv.count(bot, item) < count(this.step.grid(), item)) missing = true;
+                    }
+                    brain.log(missing ? "craft: '" + this.step.label() + "': haven't got what it needs any more (used or put away since I planned it), rethinking"
+                            : "craft: recipe didn't match the chosen items " + this.step.grid());
+                }
                 return i > 0 ? Status.DONE : Status.FAILED;
             }
         }
@@ -132,7 +200,26 @@ public final class CraftTask implements Task {
             brain.memory().forget(kind, pos);
             return null;
         }
-        return pos.pos();
+        // Thirty blocks up a staircase isn't "nearby": a player down a mine puts their own table
+        // or furnace down rather than climb all the way back for one. Only worth the walk if it's
+        // close, or we've nothing to put down ourselves.
+        BlockPos p = pos.pos();
+        double flat = Math.sqrt(Math.pow(p.getX() - bot.getX(), 2) + Math.pow(p.getZ() - bot.getZ(), 2));
+        boolean far = flat > 24 || Math.abs(p.getY() - bot.getBlockY()) > 8;
+        if (far && canPutOwnDown(bot, block)) return null;
+        return p;
+    }
+
+    /** Has (or can make on the spot) one of these to put down. */
+    private static boolean canPutOwnDown(BotPlayer bot, net.minecraft.world.level.block.Block block) {
+        if (Inv.count(bot, block.asItem()) > 0) return true;
+        if (block == net.minecraft.world.level.block.Blocks.CRAFTING_TABLE) {
+            return Inv.count(bot, s -> s.is(net.minecraft.tags.ItemTags.PLANKS)) >= 4 || Inv.count(bot, s -> s.is(net.minecraft.tags.ItemTags.LOGS)) > 0;
+        }
+        if (block == net.minecraft.world.level.block.Blocks.FURNACE) {
+            return Inv.count(bot, s -> s.is(net.minecraft.tags.ItemTags.STONE_CRAFTING_MATERIALS)) >= 8;
+        }
+        return false;
     }
 
     /** Craft immediately (inventory-grid recipes only). Returns true if anything was made. */
@@ -162,7 +249,9 @@ public final class CraftTask implements Task {
      * any cell the bot's own body pokes into (players are 0.6 wide, so a bot standing off-centre
      * overlaps its neighbour), since the game refuses to place a block there.
      */
-    static @Nullable BlockPos findPlacementSpot(BotPlayer bot) {
+    private @Nullable BlockPos nook;
+
+    public static @Nullable BlockPos findPlacementSpot(BotPlayer bot) {
         WorldView world = new WorldView(bot.level());
         BlockPos feet = Navigator.feet(bot);
         net.minecraft.world.phys.AABB body = bot.getBoundingBox().inflate(0.05);
@@ -174,7 +263,11 @@ public final class CraftTask implements Task {
                     BlockPos spot = feet.offset(dx, dy, dz);
                     if (!world.state(spot).canBeReplaced() || !world.state(spot).getFluidState().isEmpty()) continue;
                     if (!world.solidFloor(spot.below())) continue;
+                    // Never on top of a chest (or anything else with an inside): a block on a
+                    // chest's lid stops it opening.
+                    if (world.state(spot.below()).hasBlockEntity()) continue;
                     if (body.intersects(new net.minecraft.world.phys.AABB(spot))) continue;
+                    if (someoneIn(bot, spot)) continue; // the game won't put a block down on anybody
                     double dist = bot.getEyePosition().distanceToSqr(Vec3.atCenterOf(spot));
                     if (dist > 4.0 * 4.0) continue;
                     if (dist < bestDist) {
@@ -193,6 +286,7 @@ public final class CraftTask implements Task {
                     BlockPos spot = feet.offset(dx, dy, dz);
                     if (!world.state(spot).canBeReplaced() || !world.state(spot).getFluidState().isEmpty()) continue;
                     if (body.intersects(new net.minecraft.world.phys.AABB(spot))) continue;
+                    if (someoneIn(bot, spot)) continue; // the game won't put a block down on anybody
                     // Don't plug the way out at our own head height.
                     if (spot.equals(feet.above()) || spot.equals(feet.above(2))) continue;
                     if (Placer.findSupport(bot, spot) == null) continue;
@@ -202,6 +296,38 @@ public final class CraftTask implements Task {
                         bestDist = dist;
                         best = spot;
                     }
+                }
+            }
+        }
+        return best;
+    }
+
+    private static boolean someoneIn(BotPlayer bot, BlockPos spot) {
+        return !bot.level().getEntitiesOfClass(net.minecraft.world.entity.LivingEntity.class, new net.minecraft.world.phys.AABB(spot),
+                e -> e != bot && e.isAlive() && !e.isSpectator()).isEmpty();
+    }
+
+    /**
+     * Nowhere open to put it (a one-wide staircase: stone all round but the way we came): a wall
+     * block beside us, at our feet or chest, that's just rock or dirt, to dig out and set the
+     * table in, like anyone would. Not the floor, not overhead, not anything worth keeping.
+     */
+    public static @Nullable BlockPos findNook(BotPlayer bot) {
+        WorldView world = new WorldView(bot.level());
+        BlockPos feet = Navigator.feet(bot);
+        BlockPos best = null;
+        double bestDist = Double.MAX_VALUE;
+        for (var d : net.minecraft.core.Direction.Plane.HORIZONTAL) {
+            for (int dy = 0; dy <= 1; dy++) {
+                BlockPos spot = feet.relative(d).above(dy);
+                var state = world.state(spot);
+                if (state.isAir() || state.hasBlockEntity() || !world.breakable(spot)) continue;
+                if (!(state.is(net.minecraft.tags.BlockTags.BASE_STONE_OVERWORLD) || state.is(net.minecraft.tags.BlockTags.DIRT)
+                        || state.is(net.minecraft.world.level.block.Blocks.COBBLESTONE) || state.is(net.minecraft.tags.BlockTags.SAND))) continue;
+                double dist = bot.getEyePosition().distanceToSqr(Vec3.atCenterOf(spot));
+                if (dist < bestDist) {
+                    bestDist = dist;
+                    best = spot.immutable();
                 }
             }
         }

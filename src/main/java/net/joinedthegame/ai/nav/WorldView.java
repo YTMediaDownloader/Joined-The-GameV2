@@ -57,8 +57,28 @@ public final class WorldView {
         return state(pos).getFluidState();
     }
 
+    /**
+     * Any water here at all: open water, or water inside a waterlogged block. Right for "will I
+     * be swimming / is the floor wet"; for "is this a block or just water" use
+     * {@link #isPureWater} / {@link #isWaterloggedSolid}.
+     */
     public boolean isWater(BlockPos pos) {
         return fluid(pos).is(FluidTags.WATER);
+    }
+
+    /** Just water (swim through it, can't dig it): no block shape in it. */
+    public boolean isPureWater(BlockPos pos) {
+        BlockState state = state(pos);
+        return state != UNLOADED && state.getFluidState().is(FluidTags.WATER) && collision(state, pos).isEmpty();
+    }
+
+    /**
+     * A real block with water in it: a waterlogged stair, slab, fence, chest (shipwrecks are full
+     * of them). Solid, breakable like any block; but breaking it leaves a water source behind.
+     */
+    public boolean isWaterloggedSolid(BlockPos pos) {
+        BlockState state = state(pos);
+        return state != UNLOADED && state.getFluidState().is(FluidTags.WATER) && !collision(state, pos).isEmpty();
     }
 
     /** Falling or flowing water: the current shoves you around, and you can't climb it. */
@@ -123,6 +143,18 @@ public final class WorldView {
         return shape.isEmpty() || shape.max(Direction.Axis.Y) <= 0.15;
     }
 
+    /**
+     * Real cover to hide behind for the night: a full solid block. Not water or lava (a drowned
+     * swims straight in, and "not passable" isn't the same as a wall), not leaves (something over
+     * your head that a spider walks across and a skeleton sees through), not a door.
+     */
+    public boolean cover(BlockPos pos) {
+        BlockState state = state(pos);
+        if (state == UNLOADED || state.isAir() || !state.getFluidState().isEmpty()) return false;
+        if (state.is(net.minecraft.tags.BlockTags.LEAVES) || isOpenable(state) || isDangerous(state)) return false;
+        return net.minecraft.world.level.block.Block.isShapeFullBlock(collision(state, pos));
+    }
+
     /** A door or gate you can open by hand (iron doors need redstone). */
     public static boolean isOpenable(BlockState state) {
         return state.getBlock() instanceof net.minecraft.world.level.block.DoorBlock && state.is(BlockTags.WOODEN_DOORS)
@@ -142,9 +174,24 @@ public final class WorldView {
     }
 
     /** Is the block at {@code pos} something you can stand on top of? */
+    /**
+     * Wearing Frost Walker boots (and up on our feet, not swimming): still water freezes under us
+     * as we go, so the top of a pond or the sea is ground to walk on, not water to swim through.
+     * Only for planning a route (set by the Pathfinder).
+     */
+    public boolean frostWalk;
+
+    /** Still water with open air over it: what Frost Walker turns to ice underfoot. */
+    private boolean freezable(BlockPos pos, BlockState state) {
+        return state.is(net.minecraft.world.level.block.Blocks.WATER) && state.getFluidState().isSource()
+                && state(pos.above()).isAir();
+    }
+
     public boolean solidFloor(BlockPos pos) {
         BlockState state = state(pos);
-        if (state == UNLOADED || isDangerous(state)) return false;
+        if (state == UNLOADED) return false;
+        if (this.frostWalk && freezable(pos, state)) return true;
+        if (isDangerous(state)) return false;
         if (state.is(BlockTags.FENCES) || state.is(BlockTags.WALLS) || state.is(BlockTags.FENCE_GATES)) return false;
         if (state.getBlock() instanceof net.minecraft.world.level.block.DoorBlock) return false;
         VoxelShape shape = collision(state, pos);
@@ -191,6 +238,8 @@ public final class WorldView {
     public boolean breakable(BlockPos pos) {
         BlockState state = state(pos);
         if (state == UNLOADED || state.isAir()) return false;
+        // Pure water can't be dug, and a waterlogged solid (isWaterloggedSolid) is left alone
+        // while tunnelling on purpose: breaking it leaves a water source in the tunnel.
         if (!state.getFluidState().isEmpty()) return false;
         float hardness = state.getDestroySpeed(this.level, pos);
         if (hardness < 0 || hardness > 20) return false;
@@ -206,6 +255,27 @@ public final class WorldView {
             if (dir != Direction.DOWN && !fluid.isEmpty()) return false;
         }
         // Falling sand/gravel just gets dug again by the navigator, like a player would.
+        return true;
+    }
+
+    /**
+     * Fine to break to get at a chest or the like we can't otherwise see: what {@link #breakable}
+     * allows, plus blocks with water beside them (a sunken shipwreck's planks: the water coming
+     * in is no danger, and it's the only way in). Never next to lava, never a container.
+     */
+    public boolean breakableToReach(BlockPos pos) {
+        if (breakable(pos)) return true;
+        BlockState state = state(pos);
+        if (state == UNLOADED || state.isAir() || state.hasBlockEntity()) return false;
+        // Water itself can't be dug; a waterlogged stair, slab or fence (a shipwreck's hull is
+        // full of them) is a solid block like any other: it breaks, the water stays.
+        if (isPureWater(pos) || !state.getFluidState().isEmpty() && !isWaterloggedSolid(pos)) return false;
+        float hardness = state.getDestroySpeed(this.level, pos);
+        if (hardness < 0 || hardness > 20) return false;
+        if (state.is(BlockTags.BEDS) || state.is(BlockTags.DOORS)) return false;
+        for (Direction dir : Direction.values()) {
+            if (state(pos.relative(dir)).getFluidState().is(FluidTags.LAVA)) return false;
+        }
         return true;
     }
 

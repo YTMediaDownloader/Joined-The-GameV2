@@ -72,6 +72,22 @@ public final class Farms {
         return out;
     }
 
+    /**
+     * What the fence ring's still missing, from what's actually there: {fences, gate (0 or 1)}.
+     * (Projects check this after building: things go missing, a death, a creeper.) Only empty
+     * spots count: something else standing where a fence was (a wall, a lamp post, a different
+     * gate) was put there on purpose, by a player or a housemate, and isn't "fixed" back.
+     */
+    public static int[] ringMissing(WorldView w, BlockPos center, net.minecraft.core.Direction gateSide) {
+        List<BlockPos> ring = fence(center, gateSide);
+        int gate = w.state(ring.getFirst()).canBeReplaced() ? 1 : 0;
+        int fences = 0;
+        for (BlockPos p : ring.subList(1, ring.size())) {
+            if (w.state(p).canBeReplaced()) fences++;
+        }
+        return new int[]{fences, gate};
+    }
+
     public static List<BlockPos> corners(BlockPos center) {
         int r = HALF + 1;
         return List.of(center.offset(-r, 1, -r), center.offset(r, 1, -r), center.offset(-r, 1, r), center.offset(r, 1, r));

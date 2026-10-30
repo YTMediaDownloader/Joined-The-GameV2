@@ -49,6 +49,13 @@ public final class GuideBook {
         return book;
     }
 
+    /** This mod's guide (a bot has no use for one: it only ever had one by copying a player's things). */
+    public static boolean isGuide(ItemStack stack) {
+        var content = stack.get(DataComponents.WRITTEN_BOOK_CONTENT);
+        return stack.is(Items.WRITTEN_BOOK) && content != null && "Joined the Game".equals(content.author())
+                && "AI Players Guide".equals(content.title().raw());
+    }
+
     public static void give(ServerPlayer player) {
         ItemStack book = create();
         if (!player.getInventory().add(book)) player.drop(book, false, net.minecraft.util.Prediction.SERVER_ONLY);

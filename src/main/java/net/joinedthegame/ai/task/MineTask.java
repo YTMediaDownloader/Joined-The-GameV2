@@ -28,6 +28,10 @@ public final class MineTask implements Task {
     private @Nullable BlockPos block;
     private @Nullable Task sub;
     private int searchCooldown;
+    /** The breaker's count when we picked this block: it went up, so we're the ones who broke it. */
+    private int brokenBefore;
+    /** Trees spotted in the distance (logged once). */
+    private @Nullable BlockPos seenTrees;
     private int searches;
     private int ticks;
     private @Nullable Vec3 tunnelGoal;
@@ -42,9 +46,14 @@ public final class MineTask implements Task {
     /** Places not to take from (our own farm, say). */
     private java.util.function.Predicate<BlockPos> avoid = p -> false;
 
+    private int lastHave = -1;
+    private int lastGain;
+    private final int startHave;
+
     public MineTask(BotPlayer bot, Sources source, int count, String label) {
         this.source = source;
-        this.target = Inv.count(bot, source.yields()) + count;
+        this.startHave = Inv.count(bot, source.yields());
+        this.target = this.startHave + count;
         this.label = label;
         this.tunnelDir = Direction.Plane.HORIZONTAL.getRandomDirection(bot.getRandom());
     }
@@ -59,10 +68,34 @@ public final class MineTask implements Task {
         return this.label;
     }
 
+    /** How many it set out to get. */
+    public int wanted() {
+        return this.target - this.startHave;
+    }
+
     @Override
     public Status tick(BotPlayer bot, BotBrain brain) {
-        if (Inv.count(bot, this.source.yields()) >= this.target) return Status.DONE;
-        if (++this.ticks > 20 * 60 * 4) return Status.FAILED;
+        int have = Inv.count(bot, this.source.yields());
+        if (have >= this.target) return Status.DONE;
+        // The pickaxe broke half way: stop, rather than carry on "mining iron" with bare hands.
+        // (The plan gets a new pickaxe made first, from the cobble and the spare sticks.)
+        if (Inv.pickaxeTier(bot) < this.source.pickTier()) {
+            brain.log("no pickaxe good enough for " + this.source.label() + " any more: stopping");
+            return have > this.startHave ? Status.DONE : Status.FAILED;
+        }
+        // Going for a proper haul takes a while: keep at it as long as it's turning stuff up.
+        // Three minutes without a single one, or twelve all told, and that's enough (diamonds
+        // are rarer: five minutes between finds is normal, and fifteen all told).
+        ++this.ticks;
+        if (have > this.lastHave) {
+            this.lastHave = have;
+            this.lastGain = this.ticks;
+        }
+        boolean rare = this.source == Sources.DIAMOND;
+        if (this.ticks - this.lastGain > 20 * 60 * (rare ? 5 : 3) || this.ticks > 20 * 60 * (rare ? 15 : 12)) {
+            // Something's better than nothing: done if it got any, failed if none at all.
+            return have > this.startHave ? Status.DONE : Status.FAILED;
+        }
 
         if (this.sub != null) {
             Status status = this.sub.tick(bot, brain);
@@ -87,13 +120,14 @@ public final class MineTask implements Task {
             this.searchCooldown = 20;
             this.block = search(bot, brain);
             if (this.block != null) {
+                this.brokenBefore = brain.breaker().broken();
                 this.triedReposition = false;
                 this.tunnelGoal = null;
                 brain.navigator().stop(bot);
                 this.blockTicks = 0;
                 return Status.RUNNING;
             }
-            this.searches++;
+            if (this.waitingFor == null) this.searches++;
         }
         return keepExploring(bot, brain);
     }
@@ -101,7 +135,27 @@ public final class MineTask implements Task {
     private @Nullable BlockPos search(BotPlayer bot, BotBrain brain) {
         boolean surface = !this.source.isUnderground() || this.source == Sources.STONE;
         int radius = surface ? 24 : 16;
-        java.util.function.Predicate<BlockPos> skip = p -> brain.isBlacklisted(p) || this.avoid.test(p);
+        // Wood comes off trees, not houses (ours, another bot's, a village's): see Trees. And it
+        // keeps its distance from anyone it dislikes: not working right next to them.
+        var avoidPeople = brain.dislikedNearby(bot, 40);
+        // Stone and ore: not right where somebody's stood (any search, the close-by fallbacks too).
+        // And in a crowd (two or more digging round here: everyone spawned together and went for the
+        // one patch of stone in sight), don't look here at all: head off our own way, away from them,
+        // and dig there. Ten bots in two little holes kept getting stuck on each other.
+        if (this.source != Sources.LOGS && this.source.isUnderground()) {
+            Vec3 away = crowd(bot);
+            if (away != null) {
+                this.tunnelDir = net.minecraft.core.Direction.getApproximateNearest(away.x, 0, away.z);
+                this.tunnelGoal = null;
+                if (!this.toldCrowd) brain.log("too many people digging here: off my own way (" + this.tunnelDir.getName() + ")");
+                this.toldCrowd = true;
+                return null;
+            }
+        }
+        java.util.function.Predicate<BlockPos> skip = p -> brain.isBlacklisted(p) || this.avoid.test(p)
+                || this.source == Sources.LOGS && !net.joinedthegame.ai.Trees.choppable(bot, p)
+                || nearAny(avoidPeople, p, 8)
+                || this.source != Sources.LOGS && someoneBeside(bot, p);
         // Diamonds in sight and a pickaxe that can take them: nobody walks past diamonds.
         BlockPos found = null;
         if (this.source.isUnderground() && this.source != Sources.DIAMOND && Inv.pickaxeTier(bot) >= 4) {
@@ -112,7 +166,29 @@ public final class MineTask implements Task {
                 brain.log("spotted diamonds at " + found.toShortString());
             }
         }
-        if (found == null) found = Senses.findBlock(bot, this.source.blocks(), radius, surface ? 12 : 10, true, skip);
+        if (found == null) {
+            // Someone else already at it (that tree, that vein): find our own.
+            // And not right where somebody's standing: stone's everywhere, and following someone
+            // down their one-wide hole just gets everyone stuck in it.
+            found = Senses.findBlock(bot, this.source.blocks(), radius, surface ? 12 : 10, true,
+                    p -> skip.test(p) || net.joinedthegame.ai.Claims.someoneElses(bot, p) != null
+                            || this.source != Sources.LOGS && someoneBeside(bot, p));
+            if (found == null) {
+                // The only one about is someone else's: take some anyway, wait our turn, or leave it.
+                BlockPos taken = Senses.findBlock(bot, this.source.blocks(), radius, surface ? 12 : 10, true, skip);
+                var claim = taken == null ? null : net.joinedthegame.ai.Claims.someoneElses(bot, taken);
+                if (claim != null) {
+                    Choice c = choose(bot, brain, claim);
+                    if (c == Choice.TAKE) {
+                        found = taken;
+                        this.competingWith = claim;
+                    } else if (c == Choice.WAIT && this.waitingFor == null) {
+                        this.waitingFor = claim;
+                        this.waitStart = this.ticks;
+                    }
+                }
+            }
+        }
         if (found == null && this.source.isUnderground()) {
             // Ore round a corner or showing a face in the tunnel wall: not in line of sight,
             // but anyone digging along would notice it.
@@ -151,13 +227,189 @@ public final class MineTask implements Task {
         return found;
     }
 
+    private boolean toldCrowd;
+
+    /**
+     * Two or more others within five blocks (about our level): which way is away from them
+     * (null if it's not a crowd). Only while we're not already off down our own tunnel.
+     */
+    private static @Nullable Vec3 crowd(BotPlayer bot) {
+        double sx = 0, sz = 0;
+        int n = 0;
+        for (var other : bot.level().players()) {
+            if (other == bot || other.isSpectator() || !other.isAlive()) continue;
+            double dx = other.getX() - bot.getX(), dz = other.getZ() - bot.getZ(), dy = other.getY() - bot.getY();
+            if (dx * dx + dz * dz > 5 * 5 || Math.abs(dy) > 4) continue;
+            sx += dx;
+            sz += dz;
+            n++;
+        }
+        if (n < 2) return null;
+        // Away from where they are on average (or any way, if we're right in the middle).
+        if (sx * sx + sz * sz < 0.01) return new Vec3(bot.getRandom().nextDouble() - 0.5, 0, bot.getRandom().nextDouble() - 0.5);
+        return new Vec3(-sx, 0, -sz);
+    }
+
+    /** Another player stood within a couple of blocks of it (working there, or about to). */
+    private static boolean someoneBeside(BotPlayer bot, BlockPos p) {
+        for (var other : bot.level().players()) {
+            if (other == bot || other.isSpectator() || !other.isAlive()) continue;
+            double dx = other.getX() - (p.getX() + 0.5), dz = other.getZ() - (p.getZ() + 0.5), dy = other.getY() - p.getY();
+            if (dx * dx + dz * dz <= 2.5 * 2.5 && dy > -2 && dy < 4) return true;
+        }
+        return false;
+    }
+
+    private enum Choice { TAKE, WAIT, LEAVE }
+
+    /** Working someone else's tree (or vein) alongside them: told them once, if they noticed. */
+    private net.joinedthegame.ai.Claims.@Nullable Claim competingWith;
+    private boolean competitionNoticed;
+    /** Waiting our turn for this one, since when. */
+    private net.joinedthegame.ai.Claims.@Nullable Claim waitingFor;
+    private int waitStart;
+
+    /**
+     * The only tree about and someone's already on it. Decided once per bot per job (not re-rolled
+     * every look), by who we are: a selfish bot (reckless, a hoarder, not one for company) piles
+     * in and takes some; a patient one waits its turn, if there's nowhere else in sight; the rest
+     * leave it to them and look further afield. Bad blood with that bot (things it did to us that
+     * we saw) makes taking some more likely, a little.
+     */
+    private Choice choose(BotPlayer bot, BotBrain brain, net.joinedthegame.ai.Claims.Claim claim) {
+        String key = "tree:" + claim.owner();
+        String earlier = brain.recentDecision(key);
+        if (earlier != null) return Choice.valueOf(earlier);
+        // A friend's tree: just muck in. Nobody's competing (and they won't mind: see reportCompetition).
+        if (brain.friendly(claim.owner())) {
+            brain.log(claim.name() + "'s on the only " + (this.source == Sources.LOGS ? "tree" : this.source.label())
+                    + " about: they're a friend, mucking in");
+            brain.decide(key, Choice.TAKE.name());
+            return Choice.TAKE;
+        }
+        String what = (this.source == Sources.LOGS ? "tree" : this.source.label())
+                + " (at " + claim.pos().toShortString() + ", " + claim.blocks().size() + " blocks)";
+        double take = Math.clamp(0.03 + brain.selfish() * 0.75 + brain.grudgeAgainst(claim.owner()), 0.03, 0.9);
+        Choice c;
+        if (bot.getRandom().nextDouble() < take) {
+            c = Choice.TAKE;
+            brain.log("the only " + what + " about and " + claim.name() + "'s on it: going for it too"
+                    + (brain.grudgeAgainst(claim.owner()) > 0 ? " (after last time)" : ""));
+            brain.remember(net.joinedthegame.ai.BotMemory.EventType.COMPETED_FOR, claim.name());
+        } else {
+            BlockPos other = this.source == Sources.LOGS ? Senses.treesOnTheHorizon(bot, 96,
+                    t -> flatDistSqr(bot, t) < 20 * 20 || brain.isDudTrees(t)
+                            || net.joinedthegame.ai.Claims.someoneElsesNear(bot, t, 8) != null) : null;
+            boolean elsewhere = other != null;
+            if (!elsewhere && bot.getRandom().nextDouble() < brain.patient()) {
+                c = Choice.WAIT;
+                brain.log(claim.name() + "'s on the only " + what + " about: waiting my turn");
+                // If they see us standing back for them, that counts for something.
+                var server = bot.level().getServer();
+                var them = server == null ? null : server.getPlayerList().getPlayer(claim.owner());
+                var theirs = server == null ? null : net.joinedthegame.bot.BotManager.get(server).brain(claim.owner());
+                if (them != null && theirs != null && BotBrain.sees(them, bot)) {
+                    theirs.feel(bot, net.joinedthegame.ai.social.Feelings.Act.WAITED_FOR_ME, 1);
+                }
+            } else {
+                c = Choice.LEAVE;
+                brain.log(claim.name() + "'s on the only " + what + " about: leaving it to them, "
+                        + (other != null ? "there's more over at " + other.toShortString() : "looking elsewhere"));
+                brain.remember(net.joinedthegame.ai.BotMemory.EventType.LEFT_TO, claim.name());
+            }
+        }
+        brain.decide(key, c.name());
+        return c;
+    }
+
+    /** Waiting for them to finish: stand by (not in the way), watch them, and don't wait for ever. */
+    private @Nullable Status waitTurn(BotPlayer bot, BotBrain brain) {
+        var claim = this.waitingFor;
+        if (claim == null) return null;
+        var now = net.joinedthegame.ai.Claims.of(claim.owner(), bot.level().getGameTime());
+        if (now == null || now.since() != claim.since()) {
+            // They're done with it: our turn (search again straight away).
+            brain.log(claim.name() + "'s done: my turn");
+            brain.remember(net.joinedthegame.ai.BotMemory.EventType.WAITED_FOR, claim.name());
+            this.waitingFor = null;
+            brain.forgetDecision("tree:" + claim.owner());
+            this.searchCooldown = 0;
+            return Status.RUNNING;
+        }
+        if (this.ticks - this.waitStart > 20 * 90) {
+            brain.log("fed up waiting for " + claim.name() + ", looking elsewhere");
+            this.waitingFor = null;
+            brain.decide("tree:" + claim.owner(), Choice.LEAVE.name());
+            return null;
+        }
+        Navigator nav = brain.navigator();
+        double flat = flatDistSqr(bot, claim.pos());
+        if (flat < 4 * 4) {
+            // Right under it: what they chop lands on us (and gets picked up). Step back.
+            double dx = bot.getX() - (claim.pos().getX() + 0.5), dz = bot.getZ() - (claim.pos().getZ() + 0.5);
+            double len = Math.max(0.1, Math.sqrt(dx * dx + dz * dz));
+            if (!nav.isMoving()) nav.moveNear(bot, new Vec3(claim.pos().getX() + 0.5 + dx / len * 5.5, bot.getY(),
+                    claim.pos().getZ() + 0.5 + dz / len * 5.5), 1.2);
+        } else if (flat > 7 * 7) {
+            if (!nav.isMoving()) nav.moveNear(bot, Vec3.atCenterOf(claim.pos()), 5);
+        } else {
+            nav.stop(bot);
+            var server = bot.level().getServer();
+            var them = server == null ? null : server.getPlayerList().getPlayer(claim.owner());
+            if (them != null) brain.controls().lookAt(bot, them);
+        }
+        return Status.RUNNING;
+    }
+
+    /** First block off someone else's tree: if they saw us, they'll remember it. */
+    private void reportCompetition(BotPlayer bot, BotBrain brain) {
+        var claim = this.competingWith;
+        if (claim == null || this.competitionNoticed) return;
+        this.competitionNoticed = true;
+        var server = bot.level().getServer();
+        if (server == null) return;
+        var them = server.getPlayerList().getPlayer(claim.owner());
+        var theirs = net.joinedthegame.bot.BotManager.get(server).brain(claim.owner());
+        if (them == null || theirs == null) return;
+        // Seen it, and not already put out by them over this in the last few minutes (one pile-in
+        // is one thing to remember, however many armfuls it takes).
+        String key = "crowded:" + bot.getScoreboardName();
+        if (theirs.friendly(bot.getUUID())) {
+            // A friend mucking in on our tree: that's fine.
+            if (BotBrain.sees(them, bot) && theirs.recentDecision(key) == null) {
+                theirs.decide(key, "friend");
+                theirs.log(bot.getScoreboardName() + " is helping with my tree (they're a friend)");
+            }
+            return;
+        }
+        if (BotBrain.sees(them, bot) && theirs.recentDecision(key) == null) {
+            theirs.decide(key, "noticed");
+            theirs.log(bot.getScoreboardName() + " is chopping my tree too (at " + claim.pos().toShortString() + ")");
+            theirs.remember(net.joinedthegame.ai.BotMemory.EventType.CROWDED_BY, bot.getScoreboardName());
+            theirs.feel(bot, net.joinedthegame.ai.social.Feelings.Act.CROWDED_ME, 1);
+        }
+    }
+
     private Status mineTarget(BotPlayer bot, BotBrain brain) {
         BlockPos pos = this.block;
+        {
+            // Ours while we're at it, the whole tree (or vein), so others can see. Only a block
+            // that's still there: a gone one starts no claim.
+            var here = bot.level().getBlockState(pos);
+            if (!here.isAir()) {
+                java.util.function.Predicate<net.minecraft.world.level.block.state.BlockState> kind = this.source == Sources.LOGS
+                        ? st -> st.is(net.minecraft.tags.BlockTags.LOGS) : st -> st.is(here.getBlock());
+                net.joinedthegame.ai.Claims.claim(bot, pos, kind, this.source == Sources.LOGS ? 256 : 32);
+            }
+        }
         WorldView world = new WorldView(bot.level());
         boolean stillThere = this.bonus
                 ? Sources.COAL.blocks().test(world.state(pos)) || Sources.DIAMOND.blocks().test(world.state(pos))
                 : this.source.blocks().test(world.state(pos));
         if (!stillThere) {
+            // What drops from it is ours for a bit (others can see we chopped it).
+            if (brain.breaker().broken() > this.brokenBefore) net.joinedthegame.ai.Claims.noteBreak(bot, pos);
+            if (this.competingWith != null && this.competingWith.blocks().contains(pos)) reportCompetition(bot, brain);
             // Worth remembering where the good stuff was.
             if (this.bonusDiamond) {
                 brain.remember(net.joinedthegame.ai.BotMemory.EventType.FOUND, Sources.DIAMOND.label(),
@@ -274,21 +526,63 @@ public final class MineTask implements Task {
         return hit.getBlockPos();
     }
 
+    private static boolean nearAny(java.util.List<Vec3> people, BlockPos p, double within) {
+        for (Vec3 v : people) if (v.distanceToSqr(Vec3.atCenterOf(p)) < within * within) return true;
+        return false;
+    }
+
+    private static double flatDistSqr(BotPlayer bot, BlockPos p) {
+        double dx = p.getX() + 0.5 - bot.getX(), dz = p.getZ() + 0.5 - bot.getZ();
+        return dx * dx + dz * dz;
+    }
+
     private Status keepExploring(BotPlayer bot, BotBrain brain) {
+        Status waiting = waitTurn(bot, brain);
+        if (waiting != null) return waiting;
         Navigator nav = brain.navigator();
         if (nav.isMoving()) return Status.RUNNING;
         if (this.searches > 40) return Status.FAILED;
 
         if (!this.source.isUnderground()) {
-            // Look for trees: head off somewhere new on the surface.
-            double angle = bot.getRandom().nextDouble() * Math.PI * 2;
-            int dist = 20 + bot.getRandom().nextInt(20);
+            // Trees in view a long way off (an island, a wood across the plain): go that way.
+            double angle;
+            boolean toTrees = false;
+            // Got to the trees we saw and still nothing we can chop (all out of reach, or just
+            // leaves): a dud, so don't keep coming back to the same spot.
+            BlockPos went = this.seenTrees;
+            if (went != null && flatDistSqr(bot, went) < 16 * 16) {
+                brain.markDudTrees(went);
+                this.seenTrees = null;
+            }
+            BlockPos trees = this.source == Sources.LOGS ? Senses.treesOnTheHorizon(bot, 96, t -> flatDistSqr(bot, t) < 20 * 20
+                    || brain.isDudTrees(t) || net.joinedthegame.ai.Claims.someoneElsesNear(bot, t, 8) != null) : null;
+            // (Measured flat: a treetop thirty blocks straight up is right here, not in the distance.
+            // If the search can't find a log we can get at, there isn't one: it's a dud.)
+            if (trees != null && flatDistSqr(bot, trees) > 20 * 20) {
+                angle = Math.atan2(trees.getZ() + 0.5 - bot.getZ(), trees.getX() + 0.5 - bot.getX());
+                toTrees = true;
+                if (!trees.equals(this.seenTrees)) {
+                    this.seenTrees = trees;
+                    brain.log("trees in the distance at " + trees.toShortString() + ", heading over");
+                }
+            } else {
+                // Nothing in view: keep going the way we're going (see BotBrain.searchHeading),
+                // with a little drift, instead of a new random way every few steps.
+                angle = brain.searchHeading(bot) + (bot.getRandom().nextDouble() - 0.5) * 0.6;
+            }
+            int dist = toTrees ? (int) Math.min(40, Math.sqrt(flatDistSqr(bot, trees))) : 28 + bot.getRandom().nextInt(12);
             int x = Mth.floor(bot.getX() + Math.cos(angle) * dist);
             int z = Mth.floor(bot.getZ() + Math.sin(angle) * dist);
-            if (!bot.level().getChunkSource().hasChunk(x >> 4, z >> 4)) return Status.RUNNING;
+            if (!bot.level().getChunkSource().hasChunk(x >> 4, z >> 4)) {
+                if (!toTrees) brain.turnSearchHeading(bot);
+                return Status.RUNNING;
+            }
             int y = bot.level().getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, x, z);
             nav.moveNear(bot, new Vec3(x + 0.5, y, z + 0.5), 3);
-            if (nav.status() == Navigator.Status.FAILED) nav.stop(bot);
+            if (nav.status() == Navigator.Status.FAILED) {
+                nav.stop(bot);
+                if (!toTrees) brain.turnSearchHeading(bot);
+            }
             return Status.RUNNING;
         }
 

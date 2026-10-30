@@ -18,7 +18,7 @@ public final class TagAlongGoal extends Goal {
     @Override
     public int priority(BotPlayer bot) {
         ServerPlayer explorer = PlayerActivity.exploringPlayerNear(bot, 40);
-        if (explorer == null) return 0;
+        if (explorer == null || !this.brain.wouldTagAlong(explorer.getUUID())) return 0; // not with someone we're off with
         // Not everyone comes. Roll per bot, stable for a while.
         double social = this.brain.personality().social();
         if (social < 0.35) return 0;

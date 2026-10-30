@@ -111,18 +111,37 @@ public final class Inv {
     public static boolean isObsolete(BotPlayer bot, ItemStack stack) {
         String kind = gearKind(stack);
         if (kind == null || stack.isEnchanted()) return false;
+        // Gold armour isn't "worse armour", it's what keeps piglins calm: one piece is kit, not junk.
+        if (BuiltInRegistries.ITEM.getKey(stack.getItem()).getPath().startsWith("golden_")
+                && count(bot, s -> s != stack && BuiltInRegistries.ITEM.getKey(s.getItem()).getPath().startsWith("golden_") && gearKind(s) != null) == 0) {
+            return false;
+        }
         int value = gearValue(stack);
         for (EquipmentSlot slot : new EquipmentSlot[]{EquipmentSlot.HEAD, EquipmentSlot.CHEST, EquipmentSlot.LEGS, EquipmentSlot.FEET}) {
             ItemStack worn = bot.getItemBySlot(slot);
             if (worn != stack && kind.equals(gearKind(worn)) && gearValue(worn) > value) return true;
         }
         Inventory inv = bot.getInventory();
+        int better = 0;
+        boolean betterWorn = false;
         for (int i = 0; i < MAIN_SLOTS; i++) {
             ItemStack other = inv.getItem(i);
             if (other == stack || other.isEmpty() || !kind.equals(gearKind(other))) continue;
-            if (gearValue(other) > value || gearValue(other) == value && i < indexOf(bot, stack)) return true; // a spare
+            if (gearValue(other) > value || gearValue(other) == value && i < indexOf(bot, stack)) {
+                better++;
+                betterWorn = nearlyWorn(other);
+            }
         }
-        return false;
+        // The spare pickaxe for when the good one's nearly done: keep it.
+        if (kind.equals("pickaxe") && better == 1 && betterWorn) return false;
+        return better > 0;
+    }
+
+    /** A few uses left in it (under a tenth, or under 16): about to break. */
+    public static boolean nearlyWorn(ItemStack stack) {
+        if (!stack.isDamageableItem()) return false;
+        int left = stack.getMaxDamage() - stack.getDamageValue();
+        return left <= Math.max(16, stack.getMaxDamage() / 10);
     }
 
     private static int indexOf(BotPlayer bot, ItemStack stack) {

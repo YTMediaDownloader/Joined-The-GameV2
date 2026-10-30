@@ -22,11 +22,26 @@ public final class NetherGoal extends Goal {
     public int priority(BotPlayer bot) {
         // Over there: this is the plan (low enough that picking up blaze rods and raiding
         // fortress chests still get a look in).
+        // A netherite project runs its own nether trip: don't start a second one alongside it.
+        // (Even one already going: the project's trip takes over from here.)
+        if (this.brain.focus() == BotBrain.Focus.PROJECT
+                && this.brain.projects().current() == net.joinedthegame.ai.goal.ProjectGoal.Kind.NETHERITE) {
+            if (this.trip != null) {
+                this.trip.stop(bot, this.brain);
+                this.trip = null;
+            }
+            return 0;
+        }
         if (NetherTrip.inNether(bot)) return 40;
         if (this.brain.focus() != BotBrain.Focus.NETHER) return 0;
         // Setting off: in daylight, like anyone sensible.
         if (this.trip == null && bot.level().isDarkOutside()) return 0;
         return 45;
+    }
+
+    /** A nether trip is under way (it owns the bot's focus till it's done). */
+    public boolean inProgress() {
+        return this.trip != null;
     }
 
     @Override
@@ -38,7 +53,7 @@ public final class NetherGoal extends Goal {
         this.brain.log("nether trip " + status);
         this.trip = null;
         if (status == Task.Status.FAILED) {
-            this.brain.focusDone(BotBrain.Focus.NONE);
+            this.brain.focusFailed(BotBrain.Focus.NETHER);
             cooldown(this.brain.now(), 20 * 60 * 10);
         } else {
             this.brain.focusDone(BotBrain.Focus.NETHER);

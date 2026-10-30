@@ -9,21 +9,53 @@ public final class BotNames {
 
     private static final Pattern VALID = Pattern.compile("[A-Za-z0-9_]{3,16}");
 
+    /**
+     * The roster (0.9.0): celebrities, Minecraft creators, and the originals who earned their
+     * place. Their personalities are fictional Minecraft versions of them, not claims about the
+     * real people (see Personality.preset). Worlds made before this keep whoever's already on
+     * their roster; the new names are added to it, ready to invite.
+     */
     public static final List<String> DEFAULT = List.of(
-            "PixelPickle", "xXCobbleKingXx", "MossyMango", "Tater_Tot77", "NotABotHonest",
-            "CreeperHugz", "LavaLamp_Larry", "BirchPlease", "OakleyDokey", "SirDigsALot",
-            "TorchBearer99", "Gr4velGurl", "SneakyBeaky", "DiamondDave_", "CopperCrush",
-            "noob_master420", "WaffleWarrior", "BedrockBenny", "Kelpie_Kai", "ZombieZoe",
-            "FoxInSocks12", "CaveDweller", "PotatoPrince", "StoneColdSteve", "Sk3ptic",
-            "EmeraldElla", "Biscuit_Bandit", "MudMuncher", "Nether_Ned", "CraftyCarl",
-            "SpudBud", "TheFurnaceGuy", "QuartzQueen", "Twiggy_", "HoneyBadgerMC",
-            "PebbleDash", "JustVibin", "AxolotlAndy", "Dandelion_Dan", "GlowSquidGo",
-            // Real players, with their real skins and the way they play (see Personality.preset).
-            "Duckatyt", "cozmoiscool130", "Redlantern8808", "DanTDM", "stampylongnose");
+            // Celebrities (a skin drawn for the mod: see BUNDLED_SKINS).
+            "MadisonBeer", "MillieBobbyBrown", "SadieSink", "JennaOrtega", "MayaHawke", "NataliaDyer",
+            "EmmaMyers", "SabrinaCarpenter", "OliviaRodrigo", "BillieEilish", "ArianaGrande", "DuaLipa",
+            "SelenaGomez", "TateMcRae", "HaileeSteinfeld", "Zendaya", "FlorencePugh",
+            "StephenCurry", "LeBronJames", "FinnWolfhard", "JoeKeery", "JackBlack",
+            // Minecraft creators (their real skins).
+            "LDShadowLady", "GeminiTay", "PearlescentMoon", "falsesymmetry", "shubble", "ihasCupquake",
+            "Aphmau", "KatherineEliza", "Grian", "Mumbo", "Smallishbeans", "CaptainSparklez", "markiplier",
+            "DanTDM", "stampylongnose",
+            // The originals.
+            "Redlantern8808", "Duckatyt", "cozmoiscool130", "TorchBearer99", "BedrockBenny", "PixelPickle",
+            "AxolotlAndy", "MudMuncher", "PenTester");
 
     /** Names that are real accounts: the bot wears that player's actual skin. */
     public static final java.util.Set<String> REAL_SKINS = java.util.Set.of(
-            "duckatyt", "cozmoiscool130", "redlantern8808", "dantdm", "stampylongnose");
+            "duckatyt", "cozmoiscool130", "redlantern8808", "dantdm", "stampylongnose",
+            "ldshadowlady", "geminitay", "pearlescentmoon", "falsesymmetry", "shubble", "ihascupquake",
+            "aphmau", "grian", "mumbo", "smallishbeans", "captainsparklez", "markiplier");
+
+    /**
+     * Names whose skin ships with the mod ({@code textures/entity/player/<name>.png}, the slim
+     * model unless listed in {@link #WIDE_SKINS}) instead of being looked up: the real people who
+     * don't have a Minecraft account of their own (someone else owns the name, with a skin that's
+     * nothing like them). A PNG of the same name in {@code config/joinedthegame/skins} replaces it.
+     */
+    public static final java.util.Set<String> BUNDLED_SKINS = java.util.Set.of(
+            "madisonbeer", "milliebobbybrown", "sadiesink", "jennaortega", "mayahawke", "nataliadyer",
+            "emmamyers", "sabrinacarpenter", "oliviarodrigo", "billieeilish", "arianagrande", "dualipa",
+            "selenagomez", "tatemcrae", "haileesteinfeld", "zendaya", "florencepugh", "katherineeliza",
+            "stephencurry", "lebronjames", "finnwolfhard", "joekeery", "jackblack");
+
+    /** Bundled skins on the classic (wide-armed) model. */
+    public static final java.util.Set<String> WIDE_SKINS = java.util.Set.of(
+            "stephencurry", "lebronjames", "finnwolfhard", "joekeery", "jackblack");
+
+    /** On every roster, old worlds included. */
+    public static boolean isFeatured(String name) {
+        for (String n : DEFAULT) if (n.equalsIgnoreCase(name)) return true;
+        return false;
+    }
 
     public static boolean isValid(String name) {
         return VALID.matcher(name).matches();

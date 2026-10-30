@@ -68,13 +68,30 @@ public final class Navigator {
         return out.toString();
     }
 
+    /**
+     * How much building the rest of the route takes: blocks to put down plus blocks to dig out.
+     * (Worth it to get home; not worth it for one bit of cobblestone on a ledge.)
+     */
+    public int plannedWork() {
+        if (this.path == null) return 0;
+        int work = 0;
+        for (int k = this.index; k < this.path.size(); k++) {
+            PathNode n = this.path.get(k);
+            work += n.breaks().size() + (n.place() != null ? 1 : 0);
+        }
+        return work;
+    }
+
     public boolean isMoving() {
         return this.status == Status.MOVING;
     }
 
+    /** Leading animals through a gate: leave it open behind us (they're following). */
+    public boolean leaveDoorsOpen;
+
     private void closeDoorBehind(BotPlayer bot, WorldView world) {
         BlockPos door = this.openedDoor;
-        if (door == null || this.placeCooldown > 0) return;
+        if (door == null || this.placeCooldown > 0 || this.leaveDoorsOpen) return;
         if (!world.isOpenDoor(door)) {
             this.openedDoor = null;
             return;
@@ -119,23 +136,151 @@ public final class Navigator {
     public void moveToReach(BotPlayer bot, BlockPos block) {
         Vec3 center = Vec3.atCenterOf(block);
         double r = BlockBreaker.REACH - 0.6;
+        // Where we're standing counts only if the block's really in reach from where our eyes
+        // actually are (we can be anywhere in the cell, not at its middle). Otherwise "arrived"
+        // here while the breaker says "too far" and the bot just stood and stared at the block.
+        BlockPos here = feet(bot);
         moveTo(bot, center, pos -> {
+            if (pos.equals(block) || pos.above().equals(block)) return false;
+            if (pos.equals(here)) return BlockBreaker.inReach(bot, block);
             Vec3 eye = Vec3.atBottomCenterOf(pos).add(0, 1.62, 0);
-            return eye.distanceToSqr(center) <= r * r && !pos.equals(block) && !pos.above().equals(block);
+            return eye.distanceToSqr(center) <= r * r;
         });
     }
 
     /** Walk to somewhere a container can be used from: close, and with a clear view of it. */
     public void moveToUse(BotPlayer bot, BlockPos block) {
         Vec3 center = Vec3.atCenterOf(block);
+        // Already clearing the way to this one: carry on.
+        if (block.equals(this.clearView) && this.status == Status.MOVING) return;
+        this.clearView = null;
         moveTo(bot, center, pos -> {
             Vec3 eye = Vec3.atBottomCenterOf(pos).add(0, 1.62, 0);
             return eye.distanceToSqr(center) <= 3.5 * 3.5 && !pos.equals(block) && !pos.above().equals(block)
                     && BlockBreaker.canSee(bot, eye, block);
         });
+        // A chest with something sat on its lid won't open: that'll want clearing once we're there.
+        if (this.status != Status.FAILED && lidBlocker(bot.level(), block) != null && !nearOwnHome(bot, block)) {
+            this.clearView = block.immutable();
+            if (this.status == Status.ARRIVED) this.status = Status.MOVING;
+            return;
+        }
+        if (this.status != Status.FAILED || nearOwnHome(bot, block)) return;
+        // Nowhere it can be seen from (a chest inside a shipwreck's hull, behind a ruined portal's
+        // blackstone): get within reach anyway, then dig through to it, like anyone would.
+        moveTo(bot, center, pos -> {
+            Vec3 eye = Vec3.atBottomCenterOf(pos).add(0, 1.62, 0);
+            return eye.distanceToSqr(center) <= 3.8 * 3.8 && !pos.equals(block) && !pos.above().equals(block);
+        });
+        if (this.status != Status.FAILED) this.clearView = block.immutable();
+    }
+
+    /**
+     * The block keeping a chest shut, if any: something solid on its lid, or on the other half's
+     * lid for a double chest (ChestBlock.isChestBlockedAt: a redstone-conducting block above).
+     */
+    public static @Nullable BlockPos lidBlocker(net.minecraft.world.level.Level level, BlockPos chest) {
+        var state = level.getBlockState(chest);
+        if (!(state.getBlock() instanceof net.minecraft.world.level.block.ChestBlock)) return null;
+        java.util.List<BlockPos> halves = new java.util.ArrayList<>(List.of(chest));
+        if (state.getValue(net.minecraft.world.level.block.ChestBlock.TYPE) != net.minecraft.world.level.block.state.properties.ChestType.SINGLE) {
+            halves.add(chest.relative(net.minecraft.world.level.block.ChestBlock.getConnectedDirection(state)));
+        }
+        for (BlockPos half : halves) {
+            BlockPos above = half.above();
+            if (level.getBlockState(above).isRedstoneConductor(level, above)) return above;
+        }
+        return null;
+    }
+
+    /** Something to dig our way into view of once we're there (see moveToUse). */
+    private @Nullable BlockPos clearView;
+
+    /** Never dig into our own house to get at something: that's what the door's for. */
+    private static boolean nearOwnHome(BotPlayer bot, BlockPos pos) {
+        var brain = bot.brain();
+        if (brain == null) return false;
+        for (var gp : new net.minecraft.core.GlobalPos[]{brain.record().home(), brain.record().house()}) {
+            if (gp != null && gp.dimension() == bot.level().dimension() && gp.pos().distSqr(pos) < 16 * 16) return true;
+        }
+        return false;
+    }
+
+    /**
+     * Arrived within reach of a {@link #clearView} target that's still hidden: break whatever's
+     * first in the way (a plank, a bit of blackstone), one at a time, till it can be seen and
+     * used. Water beside it is fine (a shipwreck's hull is all water-side); lava isn't.
+     */
+    private void clearTheView(BotPlayer bot, Controls controls) {
+        BlockPos target = this.clearView;
+        if (target == null) return;
+        WorldView view = new WorldView(bot.level());
+        // Something on the chest's lid: off with it first.
+        BlockPos lid = lidBlocker(bot.level(), target);
+        if (lid != null) {
+            if (!BlockBreaker.inReach(bot, lid) || !view.breakableToReach(lid)) {
+                releaseBreaker(bot);
+                this.clearView = null;
+                this.status = Status.FAILED;
+                return;
+            }
+            this.digging = true;
+            controls.lookAt(bot, Vec3.atCenterOf(lid));
+            this.breaker.start(lid);
+            if (this.breaker.tick(bot, controls) == BlockBreaker.Result.FAILED) {
+                releaseBreaker(bot);
+                this.clearView = null;
+                this.status = Status.FAILED;
+            }
+            return;
+        }
+        if (BlockBreaker.canUse(bot, target)) {
+            releaseBreaker(bot);
+            this.clearView = null;
+            this.status = Status.ARRIVED;
+            return;
+        }
+        Vec3 eye = bot.getEyePosition();
+        var hit = bot.level().clip(new net.minecraft.world.level.ClipContext(eye, Vec3.atCenterOf(target),
+                net.minecraft.world.level.ClipContext.Block.COLLIDER, net.minecraft.world.level.ClipContext.Fluid.NONE, bot));
+        BlockPos block = hit.getType() == net.minecraft.world.phys.HitResult.Type.BLOCK ? hit.getBlockPos() : null;
+        WorldView world = new WorldView(bot.level());
+        if (block == null || block.equals(target) || !BlockBreaker.inReach(bot, block) || !world.breakableToReach(block)) {
+            releaseBreaker(bot);
+            this.clearView = null;
+            this.status = Status.FAILED;
+            return;
+        }
+        this.digging = true;
+        controls.lookAt(bot, Vec3.atCenterOf(block));
+        this.breaker.start(block);
+        if (this.breaker.tick(bot, controls) == BlockBreaker.Result.FAILED) {
+            releaseBreaker(bot);
+            this.clearView = null;
+            this.status = Status.FAILED;
+        }
+    }
+
+    /** Never route above this (see {@link #moveUnderground}); reset by every other move. */
+    private int ceiling = Integer.MAX_VALUE;
+
+    /** Stay under cover (set by the brain each tick: mining at night from a hole, see BotBrain). */
+    public boolean underCover;
+
+    /**
+     * Get there without coming up above {@code maxY}: tunnelling off underground, out of sight
+     * of whatever's waiting on the surface (the cheap way is usually up and over).
+     */
+    public void moveUnderground(BotPlayer bot, Vec3 point, Predicate<BlockPos> isGoal, int maxY) {
+        this.status = Status.IDLE;
+        this.goalPoint = null;
+        moveTo(bot, point, isGoal);
+        this.ceiling = maxY;
+        computePath(bot);
     }
 
     public void moveTo(BotPlayer bot, Vec3 point, Predicate<BlockPos> isGoal) {
+        this.ceiling = Integer.MAX_VALUE;
         if (this.status == Status.MOVING && this.goalPoint != null && this.goalPoint.distanceToSqr(point) < 1.0) {
             this.goal = isGoal;
             return;
@@ -155,7 +300,9 @@ public final class Navigator {
             this.path = null;
             return;
         }
-        Pathfinder finder = new Pathfinder(bot, Pathfinder.Options.normal(bot));
+        Pathfinder.Options options = Pathfinder.Options.normal(bot).below(this.ceiling);
+        if (this.underCover) options = options.underCover();
+        Pathfinder finder = new Pathfinder(bot, options);
         Pathfinder.Path found = finder.find(start, this.goalPoint, this.goal);
         if (found == null || found.nodes().size() < 2) {
             this.status = Status.FAILED;
@@ -202,6 +349,10 @@ public final class Navigator {
     }
 
     public void tick(BotPlayer bot, Controls controls) {
+        if (this.clearView != null && this.status == Status.MOVING && this.path == null) {
+            clearTheView(bot, controls);
+            return;
+        }
         if (this.status != Status.MOVING || this.path == null) return;
         if (this.placeCooldown > 0) this.placeCooldown--;
         this.pathAge++;
@@ -216,6 +367,8 @@ public final class Navigator {
             } else {
                 this.status = this.goal != null && this.goal.test(feet(bot)) ? Status.ARRIVED : Status.FAILED;
                 this.path = null;
+                // Got within reach of something we still have to dig our way into view of.
+                if (this.status == Status.ARRIVED && this.clearView != null) this.status = Status.MOVING;
             }
             return;
         }
@@ -271,6 +424,17 @@ public final class Navigator {
             return;
         }
         if (node.place() != null && world.state(node.place()).canBeReplaced()) {
+            // Somebody's stood where the block has to go (they walked in after we planned): it
+            // can't go down while they're there. A moment for them to move on, then another way.
+            if (someoneIn(bot, node.place())) {
+                if (++this.crowdedTicks > 15) {
+                    this.crowdedTicks = 0;
+                    this.pillarTicks = 0;
+                    repath(bot);
+                }
+                return;
+            }
+            this.crowdedTicks = 0;
             if (node.move() == PathNode.Move.PILLAR) {
                 controls.face(bot.getYRot(), 90f);
                 if (this.pillarIndex != this.index) {
@@ -385,6 +549,8 @@ public final class Navigator {
             Vec3 c = Vec3.atBottomCenterOf(n.pos());
             double h = Math.sqrt(Math.pow(c.x - bot.getX(), 2) + Math.pow(c.z - bot.getZ(), 2));
             double tol = (k + 1 < this.path.size() && n.move() == PathNode.Move.WALK) ? tolerance : (wet ? 0.6 : 0.3);
+            // Somebody's stood on it: we'll only be shoved off the middle, so near enough is there.
+            if (h >= tol && h < 0.9 && someoneIn(bot, n.pos())) tol = 0.9;
             boolean yOk = n.move() == PathNode.Move.DROP || n.move() == PathNode.Move.DIG_DOWN
                     ? bot.getY() < n.pos().getY() + 0.6 && (bot.onGround() || wet)
                     : Math.abs(bot.getY() - n.pos().getY()) < (wet ? 1.3 : 0.75);
@@ -411,7 +577,9 @@ public final class Navigator {
         } else {
             this.stuckTicks++;
             if ((this.stuckTicks == 20 || this.stuckTicks == 40) && (bot.horizontalCollision || needsUp)) controls.jump = true;
-            if (this.stuckTicks > 60) repath(bot);
+            // Getting nowhere because people are stood in the way (we just get pushed back): don't
+            // keep shoving, go round (a fresh plan steers clear of where they are).
+            if (this.stuckTicks > 60 || this.stuckTicks == 20 && someoneIn(bot, node.pos())) repath(bot);
         }
         this.lastPos = bot.position();
         if (nodeHorizontal > 4 || Math.abs(bot.getY() - node.pos().getY()) > 4) repath(bot);
@@ -460,6 +628,14 @@ public final class Navigator {
         double len = Math.max(Math.abs(forward), Math.abs(strafe));
         controls.forward = (float) (forward / len) * 0.3f;
         controls.strafe = (float) (strafe / len) * 0.3f;
+    }
+
+    private int crowdedTicks;
+
+    /** Anyone else (a bot, a player, a mob) in this cell: no block goes in there. */
+    private static boolean someoneIn(BotPlayer bot, BlockPos cell) {
+        return !bot.level().getEntitiesOfClass(net.minecraft.world.entity.LivingEntity.class, new net.minecraft.world.phys.AABB(cell).deflate(0.01),
+                e -> e != bot && e.isAlive() && !e.isSpectator()).isEmpty();
     }
 
     private void repath(BotPlayer bot) {

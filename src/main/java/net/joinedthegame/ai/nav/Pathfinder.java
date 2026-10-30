@@ -20,9 +20,27 @@ import org.jspecify.annotations.Nullable;
  * avoided when there's a way around.
  */
 public final class Pathfinder {
-    public record Options(boolean allowDig, boolean allowPlace, int maxFall, int maxNodes) {
+    /**
+     * {@code maxY}: never route above this height; {@code covered}: never anywhere open to the sky
+     * (both for getting away underground, out of sight: a tunnel along a hillside can come out of
+     * the slope right in front of what we're hiding from).
+     */
+    public record Options(boolean allowDig, boolean allowPlace, int maxFall, int maxNodes, int maxY, boolean covered) {
         public static Options normal(BotPlayer bot) {
-            return new Options(true, Inv.scaffoldCount(bot) > 0, 3, 3000);
+            // The reckless take the quick way down (five blocks, and the knock that comes with it),
+            // when they've the health for it; everyone else climbs down properly.
+            var brain = bot.brain();
+            boolean daredevil = brain != null && brain.personality().reckless() > 0.6 && bot.getHealth() > 12;
+            return new Options(true, Inv.scaffoldCount(bot) > 0, daredevil ? 5 : 3, 3000, Integer.MAX_VALUE, false);
+        }
+
+        public Options below(int y) {
+            return new Options(this.allowDig, this.allowPlace, this.maxFall, this.maxNodes, y, this.covered || y != Integer.MAX_VALUE);
+        }
+
+        /** Never out in the open (mining at night from a hole: no wandering back up to the surface). */
+        public Options underCover() {
+            return new Options(this.allowDig, this.allowPlace, this.maxFall, this.maxNodes, this.maxY, true);
         }
     }
 
@@ -60,6 +78,8 @@ public final class Pathfinder {
     public Pathfinder(BotPlayer bot, Options options) {
         this.bot = bot;
         this.world = new WorldView(bot.level());
+        // Frost Walker boots on, and on our feet (it does nothing while swimming): water's a road.
+        this.world.frostWalk = !bot.isInWater() && frostWalker(bot);
         this.options = options;
         this.scaffoldBudget = Inv.scaffoldCount(bot);
         // Our own house and home spot: walls there are ours, so use the door.
@@ -71,7 +91,29 @@ public final class Pathfinder {
             var house = brain.record().house();
             if (house != null && house.dimension() == bot.level().dimension()) this.house = house.pos();
         }
+        // Where other people (and mobs) are standing: no block can go down there while they are
+        // (the game won't place one into anybody), and squeezing in on top of them is a last resort.
+        // Three bots in a one-wide hole each tried to pillar out on the others' heads, for ever.
+        for (var e : bot.level().getEntitiesOfClass(net.minecraft.world.entity.LivingEntity.class, bot.getBoundingBox().inflate(48),
+                e -> e != bot && e.isAlive() && !e.isSpectator())) {
+            var box = e.getBoundingBox().deflate(0.01);
+            for (BlockPos c : BlockPos.betweenClosed(BlockPos.containing(box.minX, box.minY, box.minZ), BlockPos.containing(box.maxX, box.maxY, box.maxZ))) {
+                this.occupied.add(c.asLong());
+            }
+        }
     }
+
+    /** Boots with Frost Walker on (from a ruined portal chest, or enchanted). */
+    public static boolean frostWalker(BotPlayer bot) {
+        var boots = bot.getItemBySlot(net.minecraft.world.entity.EquipmentSlot.FEET);
+        for (var e : boots.getEnchantments().entrySet()) {
+            if (e.getKey().unwrapKey().map(k -> k.identifier().getPath().equals("frost_walker")).orElse(false)) return true;
+        }
+        return false;
+    }
+
+    /** Cells somebody else is in right now (as of planning). */
+    private final it.unimi.dsi.fastutil.longs.LongOpenHashSet occupied = new it.unimi.dsi.fastutil.longs.LongOpenHashSet();
 
     /** Our house's door (the house reaches up to 11 blocks from it, two storeys and a roof up). */
     private @Nullable BlockPos house;
@@ -125,7 +167,10 @@ public final class Pathfinder {
             if (isGoal.test(node.step.pos())) return new Path(trace(node), true);
             if (node.h < closest.h) closest = node;
             for (Candidate c : neighbours(node.step.pos(), node.placed)) {
-                double g = node.g + c.cost;
+                if (c.step.pos().getY() > this.options.maxY) continue;
+                if (this.options.covered && !c.step.pos().closerThan(start, 1.8) && outInTheOpen(c.step.pos())) continue;
+                if (c.step.place() != null && this.occupied.contains(c.step.place().asLong())) continue; // someone's in the way
+                double g = node.g + c.cost + (this.occupied.contains(c.step.pos().asLong()) ? 3 : 0);
                 long key = c.step.pos().asLong();
                 Node existing = best.get(key);
                 if (existing != null && existing.g <= g) continue;
@@ -136,6 +181,23 @@ public final class Pathfinder {
         }
         if (closest == first) return null;
         return new Path(trace(closest), false);
+    }
+
+    /**
+     * Standing here, could something outside see us? Any open cell beside us (or overhead) at
+     * foot or head height that daylight gets into: the sky, or a hillside face opening onto it.
+     */
+    private boolean outInTheOpen(BlockPos feet) {
+        var level = this.bot.level();
+        for (BlockPos cell : new BlockPos[]{feet, feet.above()}) {
+            if (level.canSeeSky(cell)) return true;
+            for (Direction d : Direction.values()) {
+                if (d == Direction.DOWN) continue;
+                BlockPos n = cell.relative(d);
+                if (this.world.passable(n) && level.getBrightness(net.minecraft.world.level.LightLayer.SKY, n) >= 8) return true;
+            }
+        }
+        return false;
     }
 
     private static double heuristic(BlockPos pos, Vec3 target) {
@@ -239,19 +301,28 @@ public final class Pathfinder {
         if ((inWater || w.climbable(p)) && w.passable(above) && w.passable(above.above())
                 && (w.isWater(above) || w.climbable(above) || w.standable(above))) {
             out.add(new Candidate(new PathNode(p.above(), PathNode.Move.UP, List.of(), null), 1.5));
-        } else if (canPlace && w.hasFloor(p) && w.passable(p.above(2))) {
-            // Pillar up
+        } else if (canPlace && w.hasFloor(p) && w.passable(p.above(2)) && w.floorTop(p) >= p.getY() - 0.01) {
+            // Pillar up (not off a slab or a bed: from half a block down a jump can't get clear
+            // of the block that has to go in under us, so it'd jump on the spot for ever)
             out.add(new Candidate(new PathNode(p.above(), PathNode.Move.PILLAR, List.of(), p), 5.0));
         }
 
         // Dig down
         if (this.options.allowDig && !inWater) {
             BlockPos below = p.below();
-            if (w.breakable(below) && w.solidFloor(below.below()) && !w.isLava(below.below())) {
+            // (Never beside water: the hole floods, and whoever's in it, or falls in later, is
+            // stuck treading water in a pit. Two bots at a pond's edge were, for minutes.)
+            if (w.breakable(below) && w.solidFloor(below.below()) && !w.isLava(below.below()) && !floods(w, below)) {
                 out.add(new Candidate(new PathNode(below, PathNode.Move.DIG_DOWN, List.of(below), null), 2.0 + digCost(below)));
             }
         }
         return out;
+    }
+
+    /** Water right beside this cell (or over it): dig it out and it fills. */
+    private static boolean floods(WorldView w, BlockPos cell) {
+        for (var d : net.minecraft.core.Direction.Plane.HORIZONTAL) if (w.isWater(cell.relative(d))) return true;
+        return false;
     }
 
     private double digCost(BlockPos pos) {

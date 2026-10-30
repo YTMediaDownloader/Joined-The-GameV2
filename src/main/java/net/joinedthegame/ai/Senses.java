@@ -50,6 +50,38 @@ public final class Senses {
         return best;
     }
 
+    /**
+     * The nearest treetop in view range (the top block of a column is a log or leaves), up to
+     * {@code radius} blocks out: an island's trees, a wood across the plain. A player sees trees a
+     * long way off, much further than they'd spot a particular log.
+     */
+    public static @Nullable BlockPos treesOnTheHorizon(BotPlayer bot, int radius, Predicate<BlockPos> skip) {
+        var level = bot.level();
+        BlockPos best = null;
+        double bestD = Double.MAX_VALUE;
+        int bx = bot.getBlockX(), bz = bot.getBlockZ();
+        for (int dx = -radius; dx <= radius; dx += 3) {
+            for (int dz = -radius; dz <= radius; dz += 3) {
+                double d = dx * dx + dz * dz;
+                if (d >= bestD || d > (double) radius * radius) continue;
+                int x = bx + dx, z = bz + dz;
+                if (!level.getChunkSource().hasChunk(x >> 4, z >> 4)) continue;
+                int y = level.getHeight(net.minecraft.world.level.levelgen.Heightmap.Types.WORLD_SURFACE, x, z);
+                BlockState top = level.getBlockState(new BlockPos(x, y - 1, z));
+                // A tree's own leaves (not leaves someone put on a build) or the top of a real trunk.
+                boolean treetop = top.is(net.minecraft.tags.BlockTags.LEAVES)
+                        ? top.hasProperty(net.minecraft.world.level.block.LeavesBlock.PERSISTENT)
+                                && !top.getValue(net.minecraft.world.level.block.LeavesBlock.PERSISTENT)
+                        : top.is(net.minecraft.tags.BlockTags.LOGS) && Trees.natural(level, new BlockPos(x, y - 1, z));
+                if (treetop && !skip.test(new BlockPos(x, y - 1, z))) {
+                    best = new BlockPos(x, y - 1, z);
+                    bestD = d;
+                }
+            }
+        }
+        return best;
+    }
+
     public static boolean isExposed(WorldView world, BlockPos pos) {
         for (Direction dir : Direction.values()) {
             BlockPos n = pos.relative(dir);
@@ -73,5 +105,20 @@ public final class Senses {
 
     public static boolean canSee(BotPlayer bot, Entity entity) {
         return bot.hasLineOfSight(entity);
+    }
+
+    /**
+     * Would we actually know this animal's there? In plain view, or both of us out under the
+     * sky (it's just over the hill). Not a sheep on the surface twenty blocks up through solid
+     * rock: bots down a mine were going after those.
+     */
+    public static boolean wouldNotice(BotPlayer bot, Entity entity) {
+        if (bot.hasLineOfSight(entity)) return true;
+        return outdoors(bot.level(), BlockPos.containing(bot.getEyePosition())) && outdoors(bot.level(), BlockPos.containing(entity.getEyePosition()));
+    }
+
+    /** Out under the sky (a tree overhead still counts; a cave or a mine doesn't). */
+    public static boolean outdoors(net.minecraft.world.level.Level level, BlockPos pos) {
+        return level.getBrightness(net.minecraft.world.level.LightLayer.SKY, pos) >= 10;
     }
 }

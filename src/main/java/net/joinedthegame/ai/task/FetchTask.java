@@ -50,16 +50,20 @@ public final class FetchTask implements Task {
     /** Something from the secret stash (trial keys, an ominous bottle): dig it up, take it, cover it again. */
     public static @Nullable FetchTask fromStash(BotPlayer bot, BotBrain brain, Predicate<ItemStack> what, int count, String label) {
         GlobalPos stash = brain.record().stash();
-        if (stash == null || stash.dimension() != bot.level().dimension() || !bot.level().isLoaded(stash.pos())) return null;
-        if (!(bot.level().getBlockEntity(stash.pos()) instanceof Container c) || countIn(c, what) == 0) return null;
+        if (stash == null || stash.dimension() != bot.level().dimension() || !bot.level().isLoaded(stash.pos())
+                || !(bot.level().getBlockEntity(stash.pos()) instanceof Container c) || countIn(c, what) == 0) {
+            // No stash (or it's not in there): valuables go in the ordinary home chests then.
+            return from(bot, brain, what, count, label);
+        }
         return new FetchTask(what, count, label, new ArrayList<>(List.of(stash.pos())));
     }
 
-    /** How many of this are in the stash (0 if it isn't loaded). */
+    /** How many of this are put away: the stash, or the home chests (0 if not loaded). */
     public static int inStash(BotPlayer bot, BotBrain brain, Predicate<ItemStack> what) {
+        int n = stored(bot, brain, what);
         GlobalPos stash = brain.record().stash();
-        if (stash == null || stash.dimension() != bot.level().dimension() || !bot.level().isLoaded(stash.pos())) return 0;
-        return bot.level().getBlockEntity(stash.pos()) instanceof Container c ? countIn(c, what) : 0;
+        if (stash == null || stash.dimension() != bot.level().dimension() || !bot.level().isLoaded(stash.pos())) return n;
+        return n + (bot.level().getBlockEntity(stash.pos()) instanceof Container c ? countIn(c, what) : 0);
     }
 
     /** Clear out these chests entirely (or as much as fits in the bag). */
@@ -80,7 +84,7 @@ public final class FetchTask implements Task {
         GlobalPos home = brain.record().home();
         if (home == null || home.dimension() != bot.level().dimension() || !bot.level().isLoaded(home.pos())) return List.of();
         if (home.pos().distSqr(bot.blockPosition()) > 96 * 96) return List.of();
-        List<BlockPos> out = new ArrayList<>(Homes.storageNear(bot.level(), home.pos()));
+        List<BlockPos> out = new ArrayList<>(Homes.storageOf(bot.level(), brain.record()));
         BotManager manager = BotManager.get(bot.level().getServer());
         out.removeIf(p -> manager.isStash(bot.level(), p) || brain.isBlacklisted(p));
         return out;

@@ -40,7 +40,8 @@ public final class ExploreGoal extends Goal {
         ServerPlayer anchor = BotManager.nearestRealPlayer(bot);
         double cx = bot.getX();
         double cz = bot.getZ();
-        if (anchor != null && anchor.distanceToSqr(bot) > 48 * 48 && bot.getRandom().nextBoolean()) {
+        if (anchor != null && net.joinedthegame.JtgConfig.DRIFT_TO_PLAYERS.get() && anchor.distanceToSqr(bot) > 48 * 48
+                && bot.getRandom().nextBoolean()) {
             cx = anchor.getX();
             cz = anchor.getZ();
         }

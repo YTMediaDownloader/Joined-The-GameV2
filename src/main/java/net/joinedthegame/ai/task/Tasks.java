@@ -45,7 +45,7 @@ public final class Tasks {
     public static @Nullable Task of(BotPlayer bot, Planner.@Nullable Step step) {
         return switch (step) {
             case null -> null;
-            case Planner.Mine mine -> new MineTask(bot, mine.source(), Math.min(mine.count(), mine.source() == Sources.LOGS ? 12 : 24), mine.label());
+            case Planner.Mine mine -> new MineTask(bot, mine.source(), Math.min(mine.source().haul(mine.count()), mine.source() == Sources.LOGS ? 12 : 32), mine.label());
             case Planner.Craft craft -> new CraftTask(craft);
             case Planner.Smelt smelt -> new SmeltTask(bot, smelt.input(), smelt.count(), smelt.output(), smelt.label());
             case Planner.Fetch fetch -> new net.joinedthegame.ai.task.FetchFromHome(fetch);

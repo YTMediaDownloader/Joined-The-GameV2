@@ -36,7 +36,7 @@ public final class CopyMiningGoal extends Goal {
     public int priority(BotPlayer bot) {
         if (Inv.pickaxeTier(bot) == 0) return 0;
         PlayerActivity.Mining mining = PlayerActivity.recentMiningNear(bot, 32, 20 * 15);
-        if (mining == null) return 0;
+        if (mining == null || !this.brain.wouldTagAlong(mining.player())) return 0; // not beside someone we're off with
         this.spot = mining.pos();
         return (int) (30 + this.brain.personality().social() * 25 + this.brain.personality().miner() * 10);
     }

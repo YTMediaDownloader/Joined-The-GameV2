@@ -69,7 +69,9 @@ public final class BotMemory {
                 Codec.INT.optionalFieldOf("deaths", 0).forGetter(c -> c.deaths),
                 Codec.LONG.optionalFieldOf("rest_until", 0L).forGetter(c -> c.restUntil),
                 Codec.STRING.optionalFieldOf("status", "discovered").forGetter(c -> c.status),
-                Codec.STRING.optionalFieldOf("left_because", "").forGetter(c -> c.leftBecause)
+                Codec.STRING.optionalFieldOf("left_because", "").forGetter(c -> c.leftBecause),
+                Codec.LONG.listOf().optionalFieldOf("locked_vaults", List.of()).forGetter(c -> List.copyOf(c.lockedVaults)),
+                Codec.LONG.listOf().optionalFieldOf("locked_ominous_vaults", List.of()).forGetter(c -> List.copyOf(c.lockedOminousVaults))
         ).apply(i, Chamber::new));
 
         public final GlobalPos center;
@@ -81,13 +83,18 @@ public final class BotMemory {
         /** discovered, entered, partly cleared, trials cleared, vaults left, ominous, raided. */
         public String status;
         public String leftBecause;
+        /** Vaults seen that it had no key for (yet): come back to them once it has one. */
+        public final java.util.Set<Long> lockedVaults = new java.util.LinkedHashSet<>();
+        public final java.util.Set<Long> lockedOminousVaults = new java.util.LinkedHashSet<>();
 
         public Chamber(GlobalPos center) {
-            this(center, List.of(), List.of(), List.of(), 0, 0L, "discovered", "");
+            this(center, List.of(), List.of(), List.of(), 0, 0L, "discovered", "", List.of(), List.of());
         }
 
         private Chamber(GlobalPos center, List<Long> cleared, List<Long> ominousCleared, List<Long> entrances, int deaths, long restUntil,
-                        String status, String leftBecause) {
+                        String status, String leftBecause, List<Long> lockedVaults, List<Long> lockedOminousVaults) {
+            this.lockedVaults.addAll(lockedVaults);
+            this.lockedOminousVaults.addAll(lockedOminousVaults);
             this.center = center;
             this.cleared.addAll(cleared);
             this.ominousCleared.addAll(ominousCleared);
@@ -162,6 +169,20 @@ public final class BotMemory {
                 case PET_DIED -> "Lost my " + what + " :(";
                 case LOOTED -> "Finished raiding a " + what + times;
                 case VISITED -> "Went to " + what + times;
+                case RELAXED -> "Took it easy: " + what + times;
+                case SOCIALISED -> "Spent time with " + what + times;
+                case RIVAL -> what + " became my rival";
+                case TRUCE -> "Made peace with " + what + times;
+                case PARTNERED -> "Got together with " + what;
+                case TURNED_DOWN -> "Asked out / turned down: " + what + times;
+                case BROKE_UP -> "Broke up with " + what + times;
+                case MOVED_IN -> "Moved in together with " + what;
+                case COMPETED_FOR -> "Went for the same tree as " + what + times;
+                case CROWDED_BY -> what + " piled in on the tree I was working" + times;
+                case STOLE_FROM -> "Took what " + what + " had chopped" + times;
+                case STOLEN_FROM -> what + " took what I'd chopped" + times;
+                case WAITED_FOR -> "Waited my turn after " + what + times;
+                case LEFT_TO -> "Left a tree to " + what + times;
             };
         }
     }
@@ -169,7 +190,33 @@ public final class BotMemory {
     /** Kinds of memories. Add new ones at the end (they're saved by name). */
     public enum EventType implements net.minecraft.util.StringRepresentable {
         DIED, ATTACKED_BY, KILLED, MET, FOUND, MADE, SETTLED, FOCUS, RECOVERED_ITEMS, LOST_ITEMS, HIT_BY_PLAYER,
-        TAMED, BUILT, PLANTED, PET_DIED, LOOTED, VISITED;
+        TAMED, BUILT, PLANTED, PET_DIED, LOOTED, VISITED, RELAXED,
+        /** Spent a while with someone (company: the Social need). */
+        SOCIALISED,
+        /** Became sworn enemies with someone. */
+        RIVAL,
+        /** Made peace with someone in a fight (a truce). */
+        TRUCE,
+        /** Got together with someone. */
+        PARTNERED,
+        /** Asked someone out and they said no (or said no to someone). */
+        TURNED_DOWN,
+        /** Broke up with someone. */
+        BROKE_UP,
+        /** Moved in with a partner (or they moved in with us). */
+        MOVED_IN,
+        /** Worked a tree (or vein) someone else was already on. Competing, not stealing. */
+        COMPETED_FOR,
+        /** Saw someone pile in on the tree (or vein) we were working. */
+        CROWDED_BY,
+        /** Picked up what someone else had just chopped or dug: theirs. */
+        STOLE_FROM,
+        /** Saw someone pick up what we'd just chopped or dug. */
+        STOLEN_FROM,
+        /** Waited for someone to finish with the only tree (or vein) about. */
+        WAITED_FOR,
+        /** Left the only tree (or vein) about to the one already working it. */
+        LEFT_TO;
 
         public static final Codec<EventType> CODEC = net.minecraft.util.StringRepresentable.fromEnum(EventType::values);
 
@@ -193,7 +240,10 @@ public final class BotMemory {
             Codec.STRING.optionalFieldOf("home_type", "").forGetter(m -> m.homeType),
             GlobalPos.CODEC.listOf().optionalFieldOf("looted_containers", List.of()).forGetter(m -> m.lootedContainers),
             Codec.unboundedMap(Codec.STRING, Codec.INT).optionalFieldOf("stored", Map.of()).forGetter(m -> m.stored),
-            Chamber.CODEC.listOf().optionalFieldOf("chambers", List.of()).forGetter(m -> List.copyOf(m.chambers.values()))
+            Chamber.CODEC.listOf().optionalFieldOf("chambers", List.of()).forGetter(m -> List.copyOf(m.chambers.values())),
+            Codec.STRING.listOf().optionalFieldOf("unfinished", List.of()).forGetter(m -> List.copyOf(m.unfinished)),
+            net.joinedthegame.ai.social.Relation.CODEC.listOf().optionalFieldOf("relations", List.of())
+                    .forGetter(m -> List.copyOf(m.relations.values()))
     ).apply(i, BotMemory::new));
 
     // Plans
@@ -206,6 +256,20 @@ public final class BotMemory {
     public @Nullable HousePlan housePlan;
     /** The personal project under way ("farm", "wolf", ...), or empty. */
     public String project = "";
+    /**
+     * Projects started and set aside before they were done (the big goal moved on, it couldn't
+     * carry on just then), most recent last: something to get back to, not forget.
+     */
+    public final List<String> unfinished = new ArrayList<>();
+    /** How it feels about everyone it's met, bots and real players (see ai/social). */
+    public final Map<java.util.UUID, net.joinedthegame.ai.social.Relation> relations = new HashMap<>();
+
+    public void setAside(String project) {
+        if (project.isEmpty()) return;
+        this.unfinished.remove(project);
+        this.unfinished.add(project);
+        while (this.unfinished.size() > 4) this.unfinished.removeFirst();
+    }
     /** What kind of home it lives in (HousePlans type name), or empty. */
     public String homeType = "";
     // Places and diary
@@ -232,7 +296,10 @@ public final class BotMemory {
 
     private BotMemory(String focus, long focusUntil, long nextRollAt, Optional<GlobalPos> deathSpot, long deathTime,
                       int deathsInARow, Optional<HousePlan> housePlan, Map<String, List<Place>> places, List<Event> events,
-                      String project, String homeType, List<GlobalPos> lootedContainers, Map<String, Integer> stored, List<Chamber> chambers) {
+                      String project, String homeType, List<GlobalPos> lootedContainers, Map<String, Integer> stored, List<Chamber> chambers,
+                      List<String> unfinished, List<net.joinedthegame.ai.social.Relation> relations) {
+        this.unfinished.addAll(unfinished);
+        for (var r : relations) this.relations.put(r.id, r);
         this.stored.putAll(stored);
         for (Chamber c : chambers) this.chambers.put(c.center.pos().asLong(), c);
         this.lootedContainers.addAll(lootedContainers);

@@ -44,6 +44,37 @@ public final class NetherTrip implements Task {
 
     private enum Stage { PREP, OBSIDIAN, PORTAL, ENTER, NETHER, RETURN, DONE }
 
+    /** What the trip's for: blaze rods (the usual), or the makings of netherite. */
+    public enum Purpose { BLAZE, NETHERITE }
+
+    private final Purpose purpose;
+    /** Netherite: ancient debris to bring home (4 a netherite ingot). */
+    private final int debrisWanted;
+    /** Netherite: no upgrade template at home or in the bag, so a bastion's on the list. */
+    private final boolean needTemplate;
+    /** Netherite: netherrack for copying the template we have. */
+    private final boolean needNetherrack;
+    private boolean bastionTried;
+    private boolean lookingForBastion;
+    private int bastionSearches;
+    private int debrisTries;
+
+    public NetherTrip() {
+        this(Purpose.BLAZE, 0, false, false);
+    }
+
+    private NetherTrip(Purpose purpose, int debrisWanted, boolean needTemplate, boolean needNetherrack) {
+        this.purpose = purpose;
+        this.debrisWanted = debrisWanted;
+        this.needTemplate = needTemplate;
+        this.needNetherrack = needNetherrack;
+    }
+
+    /** A trip for netherite: debris, and a template from a bastion if we haven't one. */
+    public static NetherTrip forNetherite(int debris, boolean needTemplate, boolean needNetherrack) {
+        return new NetherTrip(Purpose.NETHERITE, debris, needTemplate, needNetherrack);
+    }
+
     private Stage stage = Stage.PREP;
     private @Nullable Task sub;
     private final java.util.Set<String> skipped = new java.util.HashSet<>();
@@ -57,6 +88,9 @@ public final class NetherTrip implements Task {
     private int enterTicks;
     private String note = "";
     private boolean triedHome;
+    /** The frame we're building (kept through setbacks, so it gets finished, not restarted). */
+    private @Nullable PortalSite site;
+    private int portalFailures;
 
     @Override
     public String activity() {
@@ -89,9 +123,22 @@ public final class NetherTrip implements Task {
             brain.remember(BotMemory.EventType.VISITED, "the nether", null, 0.8f);
             this.stage = Stage.DONE;
         }
+        // Out looking for a bastion and one's turned up: stop wandering, go to it.
+        if (this.sub != null && this.lookingForBastion && this.ticks % 40 == 0 && BastionRaid.pick(bot, brain) != null) {
+            this.sub.stop(bot, brain);
+            this.sub = null;
+            this.lookingForBastion = false;
+        }
+        // Getting something for the trip and it's turned up anyway (picked up, handed over):
+        // stop going for it.
+        if (this.sub != null && this.stage == Stage.PREP && this.need != null && this.need.missing(bot) <= 0) {
+            this.sub.stop(bot, brain);
+            this.sub = null;
+        }
         if (this.sub != null) {
             Status s = this.sub.tick(bot, brain);
             if (s == Status.RUNNING) return Status.RUNNING;
+            this.lookingForBastion = false;
             Task finished = this.sub;
             this.sub.stop(bot, brain);
             this.sub = null;
@@ -100,7 +147,17 @@ public final class NetherTrip implements Task {
                 if (n != null && n.optional()) this.skipped.add(n.label());
                 else if (++this.rounds > 30) return Status.FAILED;
             }
-            if (s == Status.FAILED && this.stage == Stage.PORTAL) return Status.FAILED;
+            if (s == Status.FAILED && this.stage == Stage.PORTAL) {
+                // The frame didn't get finished. Short of obsidian (some went in a chest, or got
+                // used): go and get the rest, then carry on with the same frame. Otherwise try a
+                // couple more times before giving the trip up.
+                if (++this.portalFailures > 3) return Status.FAILED;
+                if (this.site != null && Inv.count(bot, Items.OBSIDIAN) < obsidianStillNeeded(bot)) {
+                    brain.log("nether: short of obsidian for the portal, getting more");
+                    this.stage = Stage.OBSIDIAN;
+                }
+                return Status.RUNNING;
+            }
             if (s == Status.FAILED && this.stage == Stage.OBSIDIAN && finished instanceof ObsidianTask) return Status.FAILED;
             return Status.RUNNING;
         }
@@ -181,11 +238,12 @@ public final class NetherTrip implements Task {
     // --- obsidian -----------------------------------------------------------------------
 
     private Status obsidian(BotPlayer bot, BotBrain brain) {
-        if (Inv.count(bot, Items.OBSIDIAN) >= OBSIDIAN_NEEDED) {
+        int needed = obsidianStillNeeded(bot);
+        if (Inv.count(bot, Items.OBSIDIAN) >= needed) {
             this.stage = Stage.PORTAL;
             return Status.RUNNING;
         }
-        this.sub = new ObsidianTask(OBSIDIAN_NEEDED);
+        this.sub = new ObsidianTask(needed);
         return Status.RUNNING;
     }
 
@@ -267,7 +325,22 @@ public final class NetherTrip implements Task {
                 this.dig = null;
                 return Status.DONE;
             }
+            if (this.travel != null) {
+                Status s = this.travel.tick(bot, brain);
+                if (s == Status.RUNNING) return Status.RUNNING;
+                this.travel.stop(bot, brain);
+                this.travel = null;
+            }
             if (this.lava == null && !find(bot, brain)) {
+                // None in sight: one we saw before (on the way somewhere, down a cave)?
+                GlobalPos here = GlobalPos.of(level.dimension(), bot.blockPosition());
+                GlobalPos known = brain.memory().nearest("lava", here, 200);
+                if (known != null && !this.triedRemembered.contains(known.pos())) {
+                    this.triedRemembered.add(known.pos());
+                    brain.log("nether: going back to the lava I saw at " + known.pos().toShortString());
+                    this.travel = new TravelTask(known.pos(), 6, "Heading for a lava pool");
+                    return Status.RUNNING;
+                }
                 brain.log("nether: no lava pool nearby to make obsidian from");
                 this.noLava = true;
                 return Status.FAILED;
@@ -292,7 +365,8 @@ public final class NetherTrip implements Task {
             // Get properly close to the pouring spot (a bucket's reach is short) with a clear view
             // of its floor, without standing in it. Pours that keep missing: get closer still.
             Vec3 pour = Vec3.atBottomCenterOf(spot).add(0, 0.05, 0);
-            double close = this.missed >= 3 ? 2.5 : 3.5;
+            // A bucket reaches as far as any block interaction (4.5); closer after a few misses.
+            double close = this.missed >= 3 ? 3.0 : 4.2;
             boolean ready = bot.getEyePosition().distanceTo(pour) <= close && !bot.blockPosition().equals(spot)
                     && BlockBreaker.canSee(bot, bot.getEyePosition(), spot.below());
             if (!ready) {
@@ -305,9 +379,16 @@ public final class NetherTrip implements Task {
                         return eye.distanceTo(pour) <= close - 0.3 && BlockBreaker.canSee(bot, eye, target.below());
                     });
                     if (nav.status() == Navigator.Status.FAILED) {
-                        brain.blacklist(lava);
-                        this.lava = null;
                         nav.stop(bot);
+                        // Can't stand anywhere for this side: try the pool's other sides before
+                        // giving up on the whole pool (and wandering off to the next one).
+                        BlockPos other = nextSide(new WorldView(level), lava, spot);
+                        if (other != null) {
+                            this.spot = other;
+                        } else {
+                            brain.blacklist(lava);
+                            this.lava = null;
+                        }
                     }
                 }
                 return Status.RUNNING;
@@ -345,11 +426,39 @@ public final class NetherTrip implements Task {
             return true;
         }
 
+        private final java.util.Set<BlockPos> triedSides = new java.util.HashSet<>();
+        private final java.util.Set<BlockPos> triedRemembered = new java.util.HashSet<>();
+        private @Nullable Task travel;
+
+        /** Another open side of the same pool to pour from, not tried yet. */
+        private @Nullable BlockPos nextSide(WorldView w, BlockPos lava, BlockPos failed) {
+            this.triedSides.add(failed);
+            for (Direction d : Direction.Plane.HORIZONTAL) {
+                BlockPos side = pourSpot(w, lava.relative(d));
+                if (side == null || this.triedSides.contains(side)) continue;
+                return side;
+            }
+            return null;
+        }
+
         static @Nullable BlockPos openSideOf(WorldView w, BlockPos lava) {
             for (Direction d : Direction.Plane.HORIZONTAL) {
-                BlockPos side = lava.relative(d);
-                if (w.state(side).isAir() && w.solidFloor(side.below()) && w.state(side.above()).isAir()) return side;
+                BlockPos side = pourSpot(w, lava.relative(d));
+                if (side != null) return side;
             }
+            return null;
+        }
+
+        /**
+         * Where to put the water down beside a lava source: an open cell at the lava's own level
+         * (a pool with a gap beside it), or, far more often, on top of the rim (a pool sits in a
+         * dip with ground all round at its own level: water poured on the rim runs over the edge
+         * and down onto the lava, which is how a player does it).
+         */
+        static @Nullable BlockPos pourSpot(WorldView w, BlockPos side) {
+            if (w.state(side).isAir() && w.solidFloor(side.below()) && w.state(side.above()).isAir()) return side;
+            BlockPos onRim = side.above();
+            if (w.solidFloor(side) && !w.isLava(side) && w.state(onRim).isAir() && w.state(onRim.above()).isAir()) return onRim;
             return null;
         }
 
@@ -365,6 +474,7 @@ public final class NetherTrip implements Task {
     private Status portal(BotPlayer bot, BotBrain brain) {
         if (this.portalCell != null && bot.level().getBlockState(this.portalCell).is(Blocks.NETHER_PORTAL)) {
             brain.rememberPlace(bot, "portal", this.portalCell);
+            brain.memory().forgetAround("portal_frame", GlobalPos.of(bot.level().dimension(), this.portalCell), 6); // finished
             this.stage = Stage.ENTER;
             return Status.RUNNING;
         }
@@ -389,16 +499,62 @@ public final class NetherTrip implements Task {
             this.sub = new TravelTask(home.pos(), 8, "Heading home to build a portal");
             return Status.RUNNING;
         }
-        // Somewhere flat to put it up.
-        PortalSite site = findSite(bot);
+        // Carry on with the frame we started (this trip or an earlier one), or somewhere flat.
+        PortalSite site = this.site;
+        if (site == null) site = rememberedFrame(bot, brain);
+        if (site == null) site = findSite(bot);
         if (site == null) {
             brain.log("nether: nowhere to build a portal");
             return Status.FAILED;
         }
+        if (Inv.count(bot, Items.OBSIDIAN) < obsidianStillNeeded(bot, site)) {
+            this.site = site;
+            this.stage = Stage.OBSIDIAN;
+            return Status.RUNNING;
+        }
+        this.site = site;
+        brain.rememberPlace(bot, "portal_frame", site.origin());
         this.portalCell = site.at(1, 1);
         this.portalFront = site.front();
         this.sub = new BuildTask(site.steps(), "Building a nether portal");
         return Status.RUNNING;
+    }
+
+    /** Obsidian still to go in the frame (all 10 if there's no frame started yet). */
+    private int obsidianStillNeeded(BotPlayer bot) {
+        return this.site == null ? OBSIDIAN_NEEDED : obsidianStillNeeded(bot, this.site);
+    }
+
+    private static int obsidianStillNeeded(BotPlayer bot, PortalSite site) {
+        int n = 0;
+        for (int x = 0; x <= 3; x++) {
+            for (int y = 0; y <= 4; y++) {
+                boolean corner = (x == 0 || x == 3) && (y == 0 || y == 4);
+                boolean edge = x == 0 || x == 3 || y == 0 || y == 4;
+                if (edge && !corner && !bot.level().getBlockState(site.at(x, y)).is(Blocks.OBSIDIAN)) n++;
+            }
+        }
+        return n;
+    }
+
+    /**
+     * A frame we started on an earlier trip and never finished (it went wrong, we got called
+     * away): finish that one rather than leave it standing half-built and start another. Found
+     * by the bottom obsidian still being there, in either direction.
+     */
+    private static @Nullable PortalSite rememberedFrame(BotPlayer bot, BotBrain brain) {
+        GlobalPos here = GlobalPos.of(bot.level().dimension(), bot.blockPosition());
+        GlobalPos at = brain.memory().nearest("portal_frame", here, 64);
+        if (at == null || !bot.level().isLoaded(at.pos())) return null;
+        for (Direction right : new Direction[]{Direction.EAST, Direction.SOUTH}) {
+            PortalSite site = new PortalSite(at.pos(), right, right.getClockWise());
+            if (bot.level().getBlockState(site.at(1, 0)).is(Blocks.OBSIDIAN) && bot.level().getBlockState(site.at(2, 0)).is(Blocks.OBSIDIAN)) {
+                brain.log("nether: finishing the portal frame I started at " + at.pos().toShortString());
+                return site;
+            }
+        }
+        brain.memory().forget("portal_frame", at); // gone
+        return null;
     }
 
     /** A 4-wide, 5-tall portal frame. {@code origin} is the bottom-left corner, along {@code right}. */
@@ -535,11 +691,12 @@ public final class NetherTrip implements Task {
 
     private Status nether(BotPlayer bot, BotBrain brain) {
         long time = brain.now() - this.enteredNetherAt;
-        boolean timeUp = time > 20 * 60 * 12;
+        boolean timeUp = time > 20 * 60 * (this.purpose == Purpose.NETHERITE ? 20 : 12);
         boolean bagFull = Inv.usedSlots(bot) >= Inv.MAIN_SLOTS - 2;
         // Beaten up: go home and heal rather than push our luck in a fortress.
         boolean hurtAndHungry = bot.getHealth() < 10 || bot.getHealth() < 14 && Inv.bestFood(bot, false) < 0;
-        if (timeUp || bagFull || hurtAndHungry || Inv.count(bot, Items.BLAZE_ROD) >= RODS_WANTED && this.netherStep >= 5) {
+        if (timeUp || bagFull || hurtAndHungry
+                || this.purpose == Purpose.BLAZE && Inv.count(bot, Items.BLAZE_ROD) >= RODS_WANTED && this.netherStep >= 5) {
             this.stage = Stage.RETURN;
             return Status.RUNNING;
         }
@@ -553,6 +710,7 @@ public final class NetherTrip implements Task {
                 return Status.RUNNING;
             }
         }
+        if (this.purpose == Purpose.NETHERITE) return netherite(bot, brain);
         switch (this.netherStep) {
             case 0 -> {
                 // Quartz first: it's everywhere and it's XP.
@@ -589,6 +747,53 @@ public final class NetherTrip implements Task {
             }
             default -> this.stage = Stage.RETURN;
         }
+        return Status.RUNNING;
+    }
+
+    /**
+     * The netherite run: a stack of netherrack if we're copying a template, a bastion for the
+     * template if we haven't one (a treasure bastion if we know one), then strip-mining down at
+     * y 15, where the ancient debris is. Home when there's enough, or it's taken too long.
+     */
+    private Status netherite(BotPlayer bot, BotBrain brain) {
+        if (this.needNetherrack && Inv.count(bot, Items.NETHERRACK) < 8) {
+            this.note = ", digging netherrack";
+            this.sub = new MineTask(bot, Sources.NETHERRACK, 8 - Inv.count(bot, Items.NETHERRACK), "Digging netherrack");
+            return Status.RUNNING;
+        }
+        if (this.needTemplate && !this.bastionTried && Inv.count(bot, Items.NETHERITE_UPGRADE_SMITHING_TEMPLATE) == 0) {
+            BastionRaid raid = BastionRaid.pick(bot, brain);
+            if (raid != null) {
+                this.bastionTried = true;
+                this.note = raid.treasure() ? ", raiding a treasure bastion" : ", raiding a bastion";
+                this.sub = raid;
+                return Status.RUNNING;
+            }
+            // Just through the portal: give it a look round first (structures nearby get
+            // noticed every few seconds), rather than wander off from one right next to us.
+            if (brain.now() - this.enteredNetherAt < 120) return Status.RUNNING;
+            if (this.bastionSearches++ < 5) {
+                this.note = ", looking for a bastion";
+                this.lookingForBastion = true;
+                this.sub = explore(bot);
+                return Status.RUNNING;
+            }
+            this.bastionTried = true;
+            brain.log("nether: no bastion found this time");
+        }
+        int debris = Inv.count(bot, Items.ANCIENT_DEBRIS) + Inv.count(bot, Items.NETHERITE_SCRAP);
+        if (debris < this.debrisWanted && this.debrisTries++ < 3) {
+            if (Inv.pickaxeTier(bot) < 5) {
+                brain.log("nether: no diamond pickaxe for the debris");
+            } else {
+                this.note = ", strip-mining for ancient debris";
+                this.sub = new MineTask(bot, Sources.ANCIENT_DEBRIS, this.debrisWanted - debris, "Strip-mining for ancient debris");
+                return Status.RUNNING;
+            }
+        }
+        brain.log("nether: heading home with " + Inv.count(bot, Items.ANCIENT_DEBRIS) + " ancient debris"
+                + (Inv.count(bot, Items.NETHERITE_UPGRADE_SMITHING_TEMPLATE) > 0 ? " and a template" : ""));
+        this.stage = Stage.RETURN;
         return Status.RUNNING;
     }
 

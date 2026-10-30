@@ -48,9 +48,14 @@ public final class ProgressionGoal extends Goal {
         int axe = Inv.axeTier(bot);
         boolean fighter = this.brain.personality().brave() > 0.6;
 
-        if (pick < 1) out.add(new Want(Items.WOODEN_PICKAXE, 1));
+        // A pickaxe that wore out half way down a mine: make the best one we can from what we're
+        // carrying (the cobble's right there, the iron maybe too), not start over with a wooden
+        // one and climb all the way up for a tree.
+        boolean stone = Inv.count(bot, s -> s.is(net.minecraft.tags.ItemTags.STONE_TOOL_MATERIALS)) >= 3;
+        boolean iron = Inv.count(bot, Items.IRON_INGOT) >= 3;
+        if (pick < 1 && !stone && !iron) out.add(new Want(Items.WOODEN_PICKAXE, 1));
         if (fighter && sword < 2) out.add(new Want(Items.STONE_SWORD, 1));
-        if (pick < 2) out.add(new Want(Items.STONE_PICKAXE, 1));
+        if (pick < 2 && !iron) out.add(new Want(Items.STONE_PICKAXE, 1));
         if (sword < 2) out.add(new Want(Items.STONE_SWORD, 1));
         if (axe < 2) out.add(new Want(Items.STONE_AXE, 1));
         if (Inv.count(bot, Items.FURNACE) == 0 && this.brain.now() % 2 == 0
@@ -58,6 +63,17 @@ public final class ProgressionGoal extends Goal {
                 && this.brain.memory().nearest("furnace", net.minecraft.core.GlobalPos.of(bot.level().dimension(), bot.blockPosition()), 64) == null) {
             out.add(new Want(Items.FURNACE, 1));
         }
+        // Before heading down a mine: the kit to make a new pickaxe if this one breaks down there
+        // (two sticks and a table; the cobble's all round us). Without it a bot was stranded,
+        // no wood for miles of rock.
+        if (pick >= 1) {
+            if (Inv.count(bot, Items.STICK) < 2) out.add(new Want(Items.STICK, 2));
+            if (Inv.count(bot, Items.CRAFTING_TABLE) == 0) out.add(new Want(Items.CRAFTING_TABLE, 1));
+        }
+        // And a pickaxe that's nearly done (a few uses left) gets a spare made before the next
+        // big dig, not discovered half way down.
+        Item spare = spareNeeded(bot);
+        if (spare != null) out.add(new Want(spare, Inv.count(bot, spare) + 1));
         // Coal before the big ores: torches, and fuel for every bit of smelting after this.
         if (pick >= 2 && Inv.count(bot, Items.COAL) + Inv.count(bot, Items.CHARCOAL) < 8) out.add(new Want(Items.COAL, 16));
 
@@ -97,6 +113,32 @@ public final class ProgressionGoal extends Goal {
         if (Inv.count(bot, Items.COAL) < 16 && pick >= 1) out.add(new Want(Items.COAL, 16));
         if (Inv.count(bot, Items.RAW_IRON) + Inv.count(bot, Items.IRON_INGOT) < 16 && pick >= 2) out.add(new Want(Items.RAW_IRON, 16));
         return out;
+    }
+
+    /**
+     * Our only pickaxe is nearly worn out (under a tenth left, or under 16 uses): the spare to
+     * make. A worn wooden one: a stone one. Diamond or
+     * netherite (precious, usually enchanted): an iron one to save it, not more diamonds.
+     */
+    private static @Nullable Item spareNeeded(BotPlayer bot) {
+        net.minecraft.world.item.ItemStack best = null;
+        int bestTier = 0;
+        int pickaxes = 0;
+        for (int i = 0; i < Inv.MAIN_SLOTS; i++) {
+            net.minecraft.world.item.ItemStack s = bot.getInventory().getItem(i);
+            if (!s.is(ItemTags.PICKAXES)) continue;
+            pickaxes++;
+            int tier = Inv.tier(s.getItem());
+            if (best == null || tier > bestTier) {
+                best = s;
+                bestTier = tier;
+            }
+        }
+        // (Any second pickaxe is the spare already.)
+        if (best == null || pickaxes > 1) return null;
+        if (!Inv.nearlyWorn(best)) return null;
+        if (bestTier <= 1) return Items.STONE_PICKAXE;
+        return bestTier >= 5 ? Items.IRON_PICKAXE : best.getItem();
     }
 
     private static void addArmor(BotPlayer bot, List<Want> out, int tier, Item chest, Item legs, Item head, Item feet) {
@@ -155,10 +197,12 @@ public final class ProgressionGoal extends Goal {
         if (status == Task.Status.FAILED && this.working != null) {
             this.failedUntil.put(this.working, this.brain.now() + 20 * 90);
         }
-        // Job done: step back and let the brain decide what's next (other goals waited for this).
-        boolean wasMining = this.task instanceof MineTask;
+        // A proper dig done: step back and let the brain decide what's next (other goals waited for
+        // this). A quick fetch (a log or two for a table) carries straight on to what it was for,
+        // or something else grabs the wood in between and it's back for more.
+        boolean bigDig = this.task instanceof MineTask mine && mine.wanted() > 4;
         this.task = null;
-        return !wasMining;
+        return !bigDig;
     }
 
     private @Nullable Task plan(BotPlayer bot) {
@@ -201,7 +245,7 @@ public final class ProgressionGoal extends Goal {
     private static @Nullable Task toTask(BotPlayer bot, Planner.Step step) {
         return switch (step) {
             case Planner.Mine mine -> {
-                MineTask task = new MineTask(bot, mine.source(), Math.min(mine.count(), mine.source() == Sources.LOGS ? 8 : 12), mine.label());
+                MineTask task = new MineTask(bot, mine.source(), Math.min(mine.source().haul(mine.count()), mine.source() == Sources.LOGS ? 8 : 32), mine.label());
                 // At night, stay down here: ignore ore that's out under the open sky.
                 // At night (dug in): stay down here. Nothing out under the sky, and nothing above our
                 // head either: digging up through the lid lets in whatever's waiting outside.
@@ -234,6 +278,18 @@ public final class ProgressionGoal extends Goal {
     }
 
     private long stoppedAt = -1;
+
+    /**
+     * Died: whatever we were in the middle of (crafting a pickaxe from the cobble we had) went
+     * with our stuff. Think again from what we've got now, not carry on with a plan for a
+     * bag we haven't got.
+     */
+    @Override
+    public void onOwnerDeath(BotPlayer bot) {
+        if (this.task != null) this.task.stop(bot, this.brain);
+        this.task = null;
+        this.working = null;
+    }
 
     @Override
     public boolean waitingOnPurpose(BotPlayer bot) {

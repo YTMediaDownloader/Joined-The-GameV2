@@ -89,7 +89,7 @@ public final class BuildTask implements Task {
     private int ticks;
 
     public BuildTask(List<Step> steps, String label) {
-        this.steps = steps;
+        this.steps = new java.util.ArrayList<>(steps);
         this.label = label;
         // Big builds get more time: about four seconds a step, at least six minutes.
         this.timeLimit = Math.max(20 * 60 * 6, steps.size() * 20 * 4);
@@ -108,7 +108,17 @@ public final class BuildTask implements Task {
         WorldView world = new WorldView(bot.level());
         // Skip steps that are already done.
         while (this.index < this.steps.size() && isDone(world, this.steps.get(this.index))) next();
-        if (this.index >= this.steps.size()) return Status.DONE;
+        if (this.index >= this.steps.size()) {
+            // Blocks skipped on the way (nothing to put them against yet, couldn't get to them):
+            // one more go at each now everything else is in.
+            if (!this.retried && !this.skipped.isEmpty()) {
+                this.retried = true;
+                this.steps.addAll(this.skipped);
+                this.skipped.clear();
+                return Status.RUNNING;
+            }
+            return Status.DONE;
+        }
 
         Step step = this.steps.get(this.index);
         if (++this.stepTicks > 20 * 15) return giveUpOnStep(brain, step, "took too long");
@@ -124,8 +134,11 @@ public final class BuildTask implements Task {
                 BlockPos target = step.pos();
                 double r = BlockBreaker.REACH - 0.8;
                 BlockPos otherHalf = step.twoLong() ? target.relative(step.facing()) : target;
+                // In the way where we stand (off-centre, poking into the next cell): this spot
+                // won't do, or the navigator "arrives" without moving and we never get out of it.
+                BlockPos here = inTheWay ? Navigator.feet(bot) : null;
                 nav.moveTo(bot, Vec3.atCenterOf(target), p -> {
-                    if (p.equals(target) || p.above().equals(target) || p.equals(otherHalf)) return false;
+                    if (p.equals(target) || p.above().equals(target) || p.equals(otherHalf) || p.equals(here)) return false;
                     Vec3 eye = Vec3.atBottomCenterOf(p).add(0, 1.62, 0);
                     return eye.distanceToSqr(Vec3.atCenterOf(target)) <= r * r;
                 });
@@ -182,7 +195,9 @@ public final class BuildTask implements Task {
         } else {
             brain.controls().lookAt(bot, Vec3.atCenterOf(step.pos()));
         }
-        if (this.stepTicks % 4 != 0) return Status.RUNNING; // a moment to turn, like a player
+        // A moment to turn, like a player. A first-time builder fumbles about a bit; one that's built
+        // half a dozen things gets on with it.
+        if (this.stepTicks % pace(brain) != 0) return Status.RUNNING;
         if (!Placer.place(bot, step.pos(), step.item()) && ++this.tries > 4) return giveUpOnStep(brain, step, "won't place");
         return Status.RUNNING;
     }
@@ -198,11 +213,30 @@ public final class BuildTask implements Task {
         return !world.state(step.pos()).canBeReplaced();
     }
 
+    private int pace = -1;
+
+    /** Ticks between blocks: 6 for a novice, down to 3 for a bot that's built plenty. */
+    private int pace(BotBrain brain) {
+        if (this.pace < 0) {
+            int built = 0;
+            for (var e : brain.memory().events()) if (e.type() == net.joinedthegame.ai.BotMemory.EventType.BUILT) built += e.count();
+            this.pace = built >= 6 ? 3 : built >= 3 ? 4 : built >= 1 ? 5 : 6;
+        }
+        return this.pace;
+    }
+
+    /** Steps given up on the first time round, and whether they've had their second go. */
+    private final List<Step> skipped = new java.util.ArrayList<>();
+    private boolean retried;
+
     private Status giveUpOnStep(BotBrain brain, Step step, String why) {
         if (step.essential()) {
             brain.log("build '" + this.label + "' failed: " + why + " at " + step.pos().toShortString());
             return Status.FAILED;
         }
+        brain.log("build '" + this.label + "': skipped " + step.kind().name().toLowerCase(java.util.Locale.ROOT) + " at "
+                + step.pos().toShortString() + " (" + why + ")" + (this.retried ? "" : ", will try again at the end"));
+        if (!this.retried && step.kind() != Kind.DIG) this.skipped.add(step);
         next();
         return Status.RUNNING;
     }

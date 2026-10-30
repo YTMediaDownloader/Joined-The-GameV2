@@ -8,7 +8,10 @@ import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.phys.Vec3;
 import org.jspecify.annotations.Nullable;
 
-/** Crouch at a bot while looking at it and it follows you around for a while. */
+/**
+ * Crouch at a bot while looking at it ("come with me?") and, if it's willing, it follows you around
+ * for a while: how long depends on how it feels about you (see BotBrain.onPlayerCrouched).
+ */
 public final class FollowGoal extends Goal {
     private Vec3 lastGoal = Vec3.ZERO;
 

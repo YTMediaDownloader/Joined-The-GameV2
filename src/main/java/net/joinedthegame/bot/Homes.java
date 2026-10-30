@@ -66,6 +66,20 @@ public final class Homes {
     }
 
     /** Chests and barrels near a bed. */
+    /**
+     * All the bot's home chests: round its bed, and round the house it built (the storage room
+     * of a longhouse or a two-storey house can be further from the bed than the bed's radius,
+     * and so can a chest a player put down for it). Duplicates removed.
+     */
+    public static List<BlockPos> storageOf(ServerLevel level, BotRecord record) {
+        java.util.LinkedHashSet<BlockPos> all = new java.util.LinkedHashSet<>();
+        var home = record.home();
+        if (home != null && home.dimension() == level.dimension()) all.addAll(storageNear(level, home.pos()));
+        var house = record.house();
+        if (house != null && house.dimension() == level.dimension()) all.addAll(storageNear(level, house.pos()));
+        return new ArrayList<>(all);
+    }
+
     public static List<BlockPos> storageNear(ServerLevel level, BlockPos bed) {
         List<BlockPos> out = new ArrayList<>();
         BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();

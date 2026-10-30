@@ -58,6 +58,7 @@ public final class TrialChamberProject implements Task {
     private @Nullable BlockPos vault;
     private int focusTicks;
     private int huntTicks;
+    private @Nullable BlockPos detour;
     private int explores;
     private boolean ominousRound;
     private boolean fetchedKeys;
@@ -136,7 +137,13 @@ public final class TrialChamberProject implements Task {
             this.sub.stop(bot, brain);
             Task done = this.sub;
             this.sub = null;
-            if (s == Status.FAILED && done instanceof TravelTask) return leave(bot, brain, "couldn't get there", 20 * 60 * 20);
+            // Couldn't get to the chamber at all: another time. Inside it (exploring, going back
+            // to a vault), a walk that doesn't work out just means trying something else.
+            if (s == Status.FAILED && done instanceof TravelTask && this.stage == Stage.TRAVEL) {
+                return leave(bot, brain, "couldn't get there", 20 * 60 * 20);
+            }
+            if (s == Status.FAILED && this.detour != null) this.skip.add(this.detour.asLong());
+            this.detour = null;
         }
         if (this.target == null) {
             this.target = pick(bot, brain);
@@ -229,6 +236,44 @@ public final class TrialChamberProject implements Task {
         List<Chambers.Spawner> spawners = Chambers.spawners(bot.level(), chamber.box());
         List<Chambers.Vault> vaults = Chambers.vaults(bot, chamber.box());
 
+        // Vaults we can't open yet (no key for them): remembered, so when a key turns up later
+        // (an ominous key from an ominous trial, say) we know where to take it.
+        for (Chambers.Vault v : vaults) {
+            var locked = v.ominous() ? notes.lockedOminousVaults : notes.lockedVaults;
+            if (v.usedByUs()) locked.remove(v.pos().asLong());
+            else if (Inv.count(bot, v.key()) == 0 && locked.add(v.pos().asLong())) {
+                brain.log("trial chamber: " + (v.ominous() ? "an ominous" : "a") + " vault at " + v.pos().toShortString() + ", no key for it yet");
+            }
+        }
+
+        // 0. A vault here in this room (the one we just cleared) that we've the key for: open it
+        //    now, between trials, rather than walking back across the chamber for it at the end.
+        if (!anySpawnerActive(bot)) {
+            for (Chambers.Vault v : vaults) {
+                if (v.usedByUs() || this.skip.contains(v.pos().asLong()) || Inv.count(bot, v.key()) == 0) continue;
+                if (v.pos().distSqr(bot.blockPosition()) > 14 * 14 || Math.abs(v.pos().getY() - bot.getBlockY()) > 5) continue;
+                if (!BlockBreaker.canSee(bot, bot.getEyePosition(), v.pos()) && v.pos().distSqr(bot.blockPosition()) > 6 * 6) continue;
+                brain.log("trial chamber: a vault right here, opening it before the next trial");
+                this.vault = v.pos();
+                this.focusTicks = 0;
+                return Status.RUNNING;
+            }
+            // A key for a vault we remember (after any right here): detour back to it.
+            BlockPos known = rememberedVault(bot, notes, vaults);
+            if (known != null) {
+                brain.log("trial chamber: got a key for the vault at " + known.toShortString() + ", going back for it");
+                if (bot.level().getBlockEntity(known) instanceof net.minecraft.world.level.block.entity.vault.VaultBlockEntity
+                        && known.distSqr(bot.blockPosition()) < 24 * 24) {
+                    this.vault = known;
+                    this.focusTicks = 0;
+                } else {
+                    this.sub = new TravelTask(known, 3, "Going back to a vault");
+                    this.detour = known;
+                }
+                return Status.RUNNING;
+            }
+        }
+
         // 1. Trials to beat: the nearest one we haven't (ominous ones on the ominous round).
         java.util.Set<Long> done = this.ominousRound ? notes.ominousCleared : notes.cleared;
         Chambers.Spawner next = null;
@@ -301,6 +346,29 @@ public final class TrialChamberProject implements Task {
             notes.restUntil = brain.now() + 20 * 60 * 15; // come back when we've the keys
         }
         return Status.DONE;
+    }
+
+    /**
+     * The nearest remembered locked vault we now hold the key for (any right here have already
+     * been seen to by then).
+     */
+    private @Nullable BlockPos rememberedVault(BotPlayer bot, BotMemory.Chamber notes, List<Chambers.Vault> loaded) {
+        BlockPos best = null;
+        double bestDist = Double.MAX_VALUE;
+        for (int pass = 0; pass < 2; pass++) {
+            boolean ominous = pass == 1;
+            if (Inv.count(bot, ominous ? Items.OMINOUS_TRIAL_KEY : Items.TRIAL_KEY) == 0) continue;
+            for (long l : ominous ? notes.lockedOminousVaults : notes.lockedVaults) {
+                BlockPos p = BlockPos.of(l);
+                if (this.skip.contains(l)) continue;
+                double d = p.distSqr(bot.blockPosition());
+                if (d < bestDist) {
+                    bestDist = d;
+                    best = p;
+                }
+            }
+        }
+        return best;
     }
 
     private static boolean anySpawnerActive(BotPlayer bot) {
@@ -427,6 +495,8 @@ public final class TrialChamberProject implements Task {
                 return Status.RUNNING;
             }
             brain.log("trial chamber: opened " + (ominous ? "an ominous" : "a") + " vault");
+            notes.lockedVaults.remove(pos.asLong());
+            notes.lockedOminousVaults.remove(pos.asLong());
             this.vault = null;
             this.sub = new CollectItems(pos, 5, 100);
             return Status.RUNNING;
@@ -436,11 +506,19 @@ public final class TrialChamberProject implements Task {
             this.vault = null;
             return Status.RUNNING;
         }
-        if (!BlockBreaker.canUse(bot, pos)) {
+        // Reach isn't enough: a vault only wakes up (and takes a key) for a player standing
+        // within 4 blocks of it, counted block to block (VaultConfig activation_range, the
+        // player's block position). Stand well inside that, with it in sight.
+        boolean awake = bot.blockPosition().closerThan(pos, 3.0);
+        if (!BlockBreaker.canUse(bot, pos) || !awake) {
             this.note = "Going to a vault";
             Navigator nav = brain.navigator();
             if (!nav.isMoving()) {
-                nav.moveToUse(bot, pos);
+                nav.moveTo(bot, Vec3.atCenterOf(pos), p -> {
+                    Vec3 eye = Vec3.atBottomCenterOf(p).add(0, 1.62, 0);
+                    return p.closerThan(pos, 3.0) && !p.equals(pos) && !p.above().equals(pos)
+                            && BlockBreaker.canSee(bot, eye, pos);
+                });
                 if (nav.status() == Navigator.Status.FAILED) {
                     this.skip.add(pos.asLong());
                     this.vault = null;
@@ -449,10 +527,11 @@ public final class TrialChamberProject implements Task {
             return Status.RUNNING;
         }
         brain.navigator().stop(bot);
+        this.note = "Opening a vault";
         if (this.ticks % 10 != 0) return Status.RUNNING;
         var key = ominous ? Items.OMINOUS_TRIAL_KEY : Items.TRIAL_KEY;
         Direction face = Direction.getApproximateNearest(bot.getEyePosition().subtract(Vec3.atCenterOf(pos)));
-        Placer.useOn(bot, pos, face, st -> st.is(key));
+        Placer.useOn(bot, pos, face, st -> st.is(key), false);
         return Status.RUNNING;
     }
 

@@ -24,7 +24,7 @@ import org.jspecify.annotations.Nullable;
  * one step at a time. Only runs when the bot's focus is {@link BotBrain.Focus#PROJECT}.
  */
 public final class ProjectGoal extends Goal {
-    public enum Kind { FARM, WOLF, DECORATE, BOW, RAID, VILLAGE_RAID, ENCHANT, TRIAL_CHAMBER }
+    public enum Kind { FARM, WOLF, DECORATE, BOW, RAID, VILLAGE_RAID, ENCHANT, TRIAL_CHAMBER, NETHERITE, PEN, TREES, CANE, GARDEN, PATHS }
 
     private @Nullable Kind kind;
     private @Nullable Task task;
@@ -57,6 +57,13 @@ public final class ProjectGoal extends Goal {
                 yield c != null && net.joinedthegame.ai.project.TrialChamberProject.notReady(bot, this.brain, false,
                         this.brain.memory().chamber(c).deaths) == null;
             }
+            // Late game: a diamond pickaxe and a real diamond loadout worth upgrading.
+            case NETHERITE -> net.joinedthegame.ai.project.NetheriteProject.worthIt(bot);
+            case PEN -> net.joinedthegame.ai.project.PenProject.available(bot, this.brain);
+            case TREES -> net.joinedthegame.ai.project.TreeFarmProject.available(bot, this.brain);
+            case CANE -> net.joinedthegame.ai.project.CaneProject.available(bot, this.brain);
+            case GARDEN -> net.joinedthegame.ai.project.GardenProject.available(bot, this.brain);
+            case PATHS -> net.joinedthegame.ai.project.PathsProject.available(bot, this.brain);
         };
     }
 
@@ -74,12 +81,43 @@ public final class ProjectGoal extends Goal {
             // Adventure: the brave, the curious and the travellers; homebodies and builders less so.
             case TRIAL_CHAMBER -> Math.max(0.1, 0.4 + p.brave() * 0.6 + p.explorer() * 0.4 + p.reckless() * 0.3 + p.nomad() * 0.4
                     - p.homebody() * 0.3 - p.builder() * 0.2);
+            // Everyone who gets this far wants it; diggers and the dogged most of all. Half way
+            // there already (a template or an ingot put by) makes it pressing.
+            case NETHERITE -> 0.6 + p.miner() * 0.6 + p.diligent() * 0.4 + p.brave() * 0.3
+                    + (Inv.count(bot, Items.NETHERITE_UPGRADE_SMITHING_TEMPLATE) + Inv.count(bot, Items.NETHERITE_INGOT) > 0 ? 1.0 : 0);
+            case PEN -> 0.4 + p.animalLover() * 1.0 + p.homebody() * 0.4 + p.diligent() * 0.2;
+            case TREES -> 0.3 + p.diligent() * 0.3 + p.builder() * 0.4 + p.homebody() * 0.2;
+            case CANE -> 0.2 + p.scholar() * 0.5 + p.diligent() * 0.2 + p.homebody() * 0.2;
+            case GARDEN -> 0.2 + p.builder() * 0.6 + p.homebody() * 0.5 + p.social() * 0.2;
+            case PATHS -> 0.2 + p.builder() * 0.6 + p.diligent() * 0.3 + p.homebody() * 0.3;
         };
     }
 
+    /**
+     * Possible now, and safe enough to set out on: the home-life ones whenever they're possible;
+     * raids, trial chambers and netherite only once the bot's geared for them (about iron). This
+     * replaces the old "nothing at all before full iron" rule: a farm or a dog can come early.
+     */
+    public boolean ready(BotPlayer bot, Kind kind) {
+        if (!available(bot, kind)) return false;
+        return homely(kind) || this.brain.needs().level(net.joinedthegame.ai.life.Needs.Need.GEAR) <= 0.45;
+    }
+
+    /** The most appealing project that's ready, by the needs it meets (0 if none). */
+    public double bestAppeal(BotPlayer bot) {
+        double best = 0;
+        for (Kind k : Kind.values()) {
+            if (!ready(bot, k)) continue;
+            double a = net.joinedthegame.ai.life.Activities.appeal(k, this.brain.needs(), this.brain.personality());
+            if (this.brain.memory().unfinished.contains(k.name().toLowerCase(Locale.ROOT))) a += 0.4; // started, never finished
+            best = Math.max(best, a);
+        }
+        return best;
+    }
+
     /** The home-life ones: everything but raiding. */
-    private static boolean homely(Kind k) {
-        return k != Kind.RAID && k != Kind.VILLAGE_RAID && k != Kind.TRIAL_CHAMBER;
+    public static boolean homely(Kind k) {
+        return k != Kind.RAID && k != Kind.VILLAGE_RAID && k != Kind.TRIAL_CHAMBER && k != Kind.NETHERITE;
     }
 
     public int homelyAvailable(BotPlayer bot) {
@@ -98,8 +136,28 @@ public final class ProjectGoal extends Goal {
         if (!homely(k)) w *= 1 - this.brain.personality().homebody() * 0.5;
         BotMemory m = this.brain.memory();
         if (k == Kind.WOLF && !m.ever(BotMemory.EventType.TAMED, "wolf")) w *= 2.0;
+        // Lost a pet lately (killed, or just died): getting a new one pulls much harder.
+        if (k == Kind.WOLF) {
+            for (BotMemory.Event e : m.events()) {
+                if (e.type() == BotMemory.EventType.PET_DIED && this.brain.now() - Math.max(e.time(), e.last()) < 24000L * 2) {
+                    w *= 2.5;
+                    break;
+                }
+            }
+        }
         if (k == Kind.ENCHANT && !m.ever(BotMemory.EventType.BUILT, "an enchanting table")) w *= 1.5;
         return w;
+    }
+
+    /** An unfinished project that could be picked up again right now. */
+    public boolean unfinishedAvailable(BotPlayer bot) {
+        for (String s : this.brain.memory().unfinished) {
+            try {
+                if (available(bot, Kind.valueOf(s.toUpperCase(Locale.ROOT)))) return true;
+            } catch (IllegalArgumentException ignored) {
+            }
+        }
+        return false;
     }
 
     public boolean anyAvailable(BotPlayer bot) {
@@ -114,15 +172,31 @@ public final class ProjectGoal extends Goal {
             try {
                 Kind k = Kind.valueOf(saved.toUpperCase(Locale.ROOT));
                 if (available(bot, k)) return k;
+                this.brain.memory().setAside(saved); // can't carry on right now: not forgotten, though
             } catch (IllegalArgumentException ignored) {
+            }
+        }
+        // Something we started before and never finished: get back to it, most recent first.
+        var unfinished = this.brain.memory().unfinished;
+        for (int i = unfinished.size() - 1; i >= 0; i--) {
+            try {
+                Kind k = Kind.valueOf(unfinished.get(i).toUpperCase(Locale.ROOT));
+                if (ready(bot, k)) {
+                    this.brain.log("getting back to an unfinished project: " + k);
+                    return k;
+                }
+            } catch (IllegalArgumentException ignored) {
+                unfinished.remove(i);
             }
         }
         boolean homelyWaiting = homelyAvailable(bot) > 0;
         Map<Kind, Double> weights = new EnumMap<>(Kind.class);
         double total = 0;
         for (Kind k : Kind.values()) {
-            if (!available(bot, k)) continue;
-            double w = adjustedWeight(bot, k, homelyWaiting);
+            if (!ready(bot, k)) continue;
+            // Personality's taste for it, times how much it meets what the bot needs right now.
+            double w = adjustedWeight(bot, k, homelyWaiting)
+                    * (0.2 + net.joinedthegame.ai.life.Activities.appeal(k, this.brain.needs(), this.brain.personality()));
             weights.put(k, w);
             total += w;
         }
@@ -138,10 +212,23 @@ public final class ProjectGoal extends Goal {
     public void force(Kind kind, long now) {
         if (this.task != null && this.kind != kind) this.task = null;
         this.kind = kind;
+        this.forced = true;
         this.restUntil.remove(kind);
+        // Told to go: the "come back to it later" on each chamber doesn't apply.
+        if (kind == Kind.TRIAL_CHAMBER) {
+            for (var c : this.brain.memory().chambers()) c.restUntil = 0;
+        }
         this.brain.memory().project = kind.name().toLowerCase(Locale.ROOT);
         this.brain.setFocus(BotBrain.Focus.PROJECT, now);
     }
+
+    /** A project's actually under way (not just picked), or someone told it to do this one. */
+    public boolean running() {
+        return this.task != null || this.forced;
+    }
+
+    /** Started by the /jtg project command: the "full iron first" rule leaves it alone. */
+    private boolean forced;
 
     public @Nullable Kind current() {
         return this.kind;
@@ -154,12 +241,14 @@ public final class ProjectGoal extends Goal {
         if (this.brain.focus() != BotBrain.Focus.PROJECT) return 0;
         // In a trial chamber: committed. Above everyday gearing up and loot-grabbing (mining a bit
         // of iron on the way past isn't a reason to drop it); fights, food and emergencies still win.
-        if (this.kind == Kind.TRIAL_CHAMBER && this.task != null) return 58;
+        // (Already standing in one counts too: otherwise looting its chests, at 46, beats starting.)
+        if (this.kind == Kind.TRIAL_CHAMBER && (this.task != null
+                || net.joinedthegame.ai.project.TrialChamberProject.inChamber(bot))) return 58;
         if (bot.level().isDarkOutside()) return 0;
         if (this.kind == null) {
             this.kind = pick(bot);
             if (this.kind == null) {
-                this.brain.focusDone(BotBrain.Focus.NONE);
+                this.brain.focusFailed(BotBrain.Focus.PROJECT);
                 return 0;
             }
             this.brain.memory().project = this.kind.name().toLowerCase(Locale.ROOT);
@@ -182,6 +271,12 @@ public final class ProjectGoal extends Goal {
                 case VILLAGE_RAID -> new net.joinedthegame.ai.project.VillageRaidProject();
                 case ENCHANT -> new net.joinedthegame.ai.project.EnchantProject();
                 case TRIAL_CHAMBER -> new net.joinedthegame.ai.project.TrialChamberProject();
+                case NETHERITE -> new net.joinedthegame.ai.project.NetheriteProject();
+                case PEN -> new net.joinedthegame.ai.project.PenProject();
+                case TREES -> new net.joinedthegame.ai.project.TreeFarmProject();
+                case CANE -> new net.joinedthegame.ai.project.CaneProject();
+                case GARDEN -> new net.joinedthegame.ai.project.GardenProject();
+                case PATHS -> new net.joinedthegame.ai.project.PathsProject();
             };
         }
         Task.Status status = this.task.tick(bot, this.brain);
@@ -190,12 +285,14 @@ public final class ProjectGoal extends Goal {
         this.brain.log("project " + kind + " " + status);
         this.task = null;
         this.kind = null;
+        this.forced = false;
         this.brain.memory().project = "";
         if (status == Task.Status.FAILED) {
             this.restUntil.put(kind, this.brain.now() + 20 * 60 * 20);
-            this.brain.focusDone(BotBrain.Focus.NONE);
+            this.brain.focusFailed(BotBrain.Focus.PROJECT);
             cooldown(this.brain.now(), 20 * 30);
         } else {
+            this.brain.memory().unfinished.remove(kind.name().toLowerCase(Locale.ROOT)); // done with it
             this.brain.focusDone(BotBrain.Focus.PROJECT);
         }
         return false;
@@ -210,7 +307,8 @@ public final class ProjectGoal extends Goal {
 
     @Override
     public boolean waitingOnPurpose(BotPlayer bot) {
-        return this.task instanceof net.joinedthegame.ai.project.TrialChamberProject t && t.waitingOnTrial();
+        return this.task instanceof net.joinedthegame.ai.project.TrialChamberProject t && t.waitingOnTrial()
+                || this.task instanceof net.joinedthegame.ai.project.PenProject pen && pen.waiting();
     }
 
     @Override

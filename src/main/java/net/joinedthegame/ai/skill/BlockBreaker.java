@@ -26,18 +26,50 @@ public final class BlockBreaker {
     private int ticks;
     private int lastStage = -1;
 
-    /** Progress on the last block we stopped hitting, so coming straight back resumes it. */
-    private @Nullable BlockPos pausedPos;
-    private float pausedProgress;
-    private long pausedAt;
+    /**
+     * Progress on the blocks we've had a go at lately, so coming back to one resumes it. Just the
+     * last one wasn't enough: anything switching us between two blocks (a dig-out and a mining
+     * target, the aim moving and back) started both from nothing every time, and as each restart
+     * waits to turn and face the block first, the bot stood staring and never swung at all.
+     */
+    private final java.util.LinkedHashMap<BlockPos, Saved> recent = new java.util.LinkedHashMap<>();
+
+    private record Saved(float progress, long at) {}
+    private long gameTime;
     private boolean checkResume;
+    /** A crack left showing on a block we switched away from (cleared next tick). */
+    private @Nullable BlockPos staleCrack;
+    /** Blocks actually broken, ever (the brain's watchdog counts these as progress). */
+    private int broken;
+
+    public int broken() {
+        return this.broken;
+    }
+
+    private void rememberProgress(BlockPos pos, float progress) {
+        this.recent.remove(pos);
+        if (progress > 0) this.recent.put(pos, new Saved(progress, this.gameTime));
+        while (this.recent.size() > 4) this.recent.remove(this.recent.keySet().iterator().next());
+    }
+
+    /** For the debug log: what it's on, how far through, how long. */
+    public String debugString() {
+        return this.target == null ? "idle" : this.target.toShortString() + " " + Math.round(this.progress * 100) + "% t" + this.ticks;
+    }
 
     public @Nullable BlockPos target() {
         return this.target;
     }
 
+    /** What we picked to break it with (to notice it being swapped out). */
+    private net.minecraft.world.item.ItemStack held = net.minecraft.world.item.ItemStack.EMPTY;
+
     public void start(BlockPos pos) {
         if (pos.equals(this.target)) return;
+        if (this.target != null) {
+            rememberProgress(this.target, this.progress);
+            this.staleCrack = this.target;
+        }
         this.target = pos.immutable();
         this.progress = 0;
         this.ticks = 0;
@@ -52,9 +84,7 @@ public final class BlockBreaker {
 
     public void cancel(BotPlayer bot) {
         if (this.target != null) {
-            this.pausedPos = this.target;
-            this.pausedProgress = this.progress;
-            this.pausedAt = bot.level().getGameTime();
+            rememberProgress(this.target, this.progress);
             bot.level().destroyBlockProgress(bot.getId(), this.target, -1);
         }
         this.target = null;
@@ -76,7 +106,20 @@ public final class BlockBreaker {
 
     /** Clear line from {@code eye} to the block (it's the first thing hit). */
     public static boolean canSee(BotPlayer bot, Vec3 eye, BlockPos pos) {
-        var hit = bot.level().clip(new net.minecraft.world.level.ClipContext(eye, Vec3.atCenterOf(pos),
+        Vec3 center = Vec3.atCenterOf(pos);
+        if (clearTo(bot, eye, center, pos)) return true;
+        // The middle's hidden (a candle, a lip of the alcove it sits in): any face turned our
+        // way that we can see will do, like a player clicking the part they can see.
+        for (net.minecraft.core.Direction d : net.minecraft.core.Direction.values()) {
+            Vec3 face = center.add(d.getStepX() * 0.45, d.getStepY() * 0.45, d.getStepZ() * 0.45);
+            boolean facesUs = (eye.x - center.x) * d.getStepX() + (eye.y - center.y) * d.getStepY() + (eye.z - center.z) * d.getStepZ() > 0.5;
+            if (facesUs && clearTo(bot, eye, face, pos)) return true;
+        }
+        return false;
+    }
+
+    private static boolean clearTo(BotPlayer bot, Vec3 eye, Vec3 point, BlockPos pos) {
+        var hit = bot.level().clip(new net.minecraft.world.level.ClipContext(eye, point,
                 net.minecraft.world.level.ClipContext.Block.COLLIDER, net.minecraft.world.level.ClipContext.Fluid.NONE, bot));
         return hit.getType() == net.minecraft.world.phys.HitResult.Type.MISS || hit.getBlockPos().equals(pos);
     }
@@ -112,6 +155,11 @@ public final class BlockBreaker {
     }
 
     public Result tick(BotPlayer bot, Controls controls) {
+        this.gameTime = bot.level().getGameTime();
+        if (this.staleCrack != null) {
+            if (!this.staleCrack.equals(this.target)) bot.level().destroyBlockProgress(bot.getId(), this.staleCrack, -1);
+            this.staleCrack = null;
+        }
         if (this.target == null) return Result.FAILED;
         ServerLevel level = bot.level();
         BlockState state = level.getBlockState(this.target);
@@ -132,13 +180,19 @@ public final class BlockBreaker {
 
         if (this.checkResume) {
             this.checkResume = false;
-            if (this.target.equals(this.pausedPos) && level.getGameTime() - this.pausedAt < 100) {
-                this.progress = this.pausedProgress;
-                this.ticks = 20;
+            Saved saved = this.recent.remove(this.target);
+            if (saved != null && level.getGameTime() - saved.at() < 200) {
+                this.progress = saved.progress();
+                this.ticks = 20; // already facing it: straight back to swinging
             }
         }
         controls.lookAt(bot, Vec3.atCenterOf(this.target));
-        if (this.ticks == 0 || this.ticks == 20) Inv.holdBestToolFor(bot, state);
+        // The right tool in hand, and still in hand: something else (a fight, a torch going
+        // up, a bite to eat) may have swapped it out since, and we'd carry on with a sword.
+        if (this.ticks == 0 || this.ticks % 10 == 0 || bot.getMainHandItem() != this.held) {
+            Inv.holdBestToolFor(bot, state);
+            this.held = bot.getMainHandItem();
+        }
         this.ticks++;
         if (this.ticks > 1200) {
             cancel(bot);
@@ -158,7 +212,9 @@ public final class BlockBreaker {
             finish(bot);
             bot.gameMode.destroyBlock(pos);
             bot.resetLastActionTime();
-            return level.getBlockState(pos).isAir() || level.getBlockState(pos) != state ? Result.DONE : Result.FAILED;
+            boolean gone = level.getBlockState(pos).isAir() || level.getBlockState(pos) != state;
+            if (gone) this.broken++;
+            return gone ? Result.DONE : Result.FAILED;
         }
         return Result.RUNNING;
     }

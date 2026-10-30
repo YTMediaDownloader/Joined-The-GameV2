@@ -22,7 +22,9 @@ public final class LeashGoal extends Goal {
     @Override
     public int priority(BotPlayer bot) {
         int max = JtgConfig.MAX_DISTANCE.get();
-        if (max <= 0) return 0;
+        if (max <= 0 || !JtgConfig.LEASH.get()) return 0;
+        // Off on a long trip: let it go where it has to (unless the config says otherwise).
+        if (!JtgConfig.LEASH_ON_EXPEDITIONS.get() && this.brain.onExpedition(bot)) return 0;
         ServerPlayer nearest = BotManager.nearestRealPlayer(bot);
         this.anchor = nearest;
         if (nearest == null) return 0;
@@ -34,11 +36,12 @@ public final class LeashGoal extends Goal {
         ServerPlayer anchor = this.anchor;
         if (anchor == null || anchor.level() != bot.level()) return false;
         int max = JtgConfig.MAX_DISTANCE.get();
-        if (anchor.distanceToSqr(bot) < (max * 0.5) * (max * 0.5)) return false;
+        double back = max * JtgConfig.COME_BACK_PERCENT.get() / 100.0;
+        if (anchor.distanceToSqr(bot) < (back + 4) * (back + 4)) return false;
         Navigator nav = this.brain.navigator();
         nav.sprint = true;
         if (!nav.isMoving()) {
-            nav.moveNear(bot, anchor.position(), max * 0.4);
+            nav.moveNear(bot, anchor.position(), back);
             if (nav.status() == Navigator.Status.FAILED) {
                 nav.stop(bot);
                 cooldown(this.brain.now(), 100);

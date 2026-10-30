@@ -80,6 +80,14 @@ public final class Placer {
      * first item matching {@code item} first.
      */
     public static boolean useOn(BotPlayer bot, BlockPos pos, Direction face, Predicate<ItemStack> item) {
+        return useOn(bot, pos, face, item, true);
+    }
+
+    /**
+     * {@code crouch} false for things the block itself does with the item (a key in a vault):
+     * crouching with anything in either hand skips the block's part, so the key'd do nothing.
+     */
+    public static boolean useOn(BotPlayer bot, BlockPos pos, Direction face, Predicate<ItemStack> item, boolean crouch) {
         if (!Inv.hold(bot, item)) return false;
         ServerLevel level = bot.level();
         Vec3 hitVec = Vec3.atCenterOf(pos).add(Vec3.atLowerCornerOf(face.getUnitVec3i()).scale(0.5));
@@ -87,7 +95,7 @@ public final class Placer {
         boolean wasSneaking = bot.isShiftKeyDown();
         // Crouch while doing it: with a shield in the other hand, the game won't let you hoe
         // or strip anything otherwise (players do exactly the same).
-        bot.setShiftKeyDown(true);
+        bot.setShiftKeyDown(crouch);
         InteractionResult result = bot.gameMode.useItemOn(bot, level, bot.getMainHandItem(), InteractionHand.MAIN_HAND,
                 new BlockHitResult(hitVec, face, pos, false));
         bot.setShiftKeyDown(wasSneaking);

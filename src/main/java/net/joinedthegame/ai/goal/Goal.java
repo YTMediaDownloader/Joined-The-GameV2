@@ -28,6 +28,9 @@ public abstract class Goal {
         this.brain.navigator().stop(bot);
     }
 
+    /** The bot just died: whatever this goal was half way through is gone with its stuff. */
+    public void onOwnerDeath(BotPlayer bot) {}
+
     /**
      * Standing still on purpose, waiting on the game (asleep, hiding out the night, food in the
      * furnace, a trial spawner's reward...): the freeze watchdog leaves it alone.

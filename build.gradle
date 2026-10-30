@@ -191,8 +191,22 @@ def clearOldJars = tasks.register('clearOldJars', Delete) {
     delete fileTree(layout.buildDirectory.dir('libs')) { include '*.jar' }
 }
 tasks.named('jar') { dependsOn clearOldJars }
+// The testing jar: the very same mod plus a marker file that turns the bot debug log and
+// /jtg debug on (see DebugLog). The normal jar has no debugging in it at all.
+def debugMarker = tasks.register('debugMarker') {
+    def marker = layout.buildDirectory.file('debug-marker/joinedthegame-debug.marker')
+    outputs.file(marker)
+    doLast { marker.get().asFile.text = 'Joined the Game testing jar: bot debug logging on.' }
+}
+def debugJar = tasks.register('debugJar', Jar) {
+    dependsOn tasks.named('jar'), debugMarker
+    archiveClassifier = 'debug'
+    from(zipTree(tasks.named('jar').flatMap { it.archiveFile })) { exclude 'META-INF/MANIFEST.MF' }
+    from(layout.buildDirectory.dir('debug-marker'))
+}
 def archiveRelease = tasks.register('archiveRelease', Copy) {
     from tasks.named('jar')
+    from debugJar
     into layout.projectDirectory.dir('releases')
 }
-tasks.named('build') { finalizedBy archiveRelease }
+tasks.named('build') { dependsOn debugJar; finalizedBy archiveRelease }

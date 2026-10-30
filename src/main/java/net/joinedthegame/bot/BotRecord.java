@@ -33,11 +33,13 @@ public final class BotRecord {
             State.CODEC.fieldOf("state").forGetter(BotRecord::state),
             GlobalPos.CODEC.optionalFieldOf("home").forGetter(r -> Optional.ofNullable(r.home)),
             GlobalPos.CODEC.optionalFieldOf("house").forGetter(r -> Optional.ofNullable(r.house)),
-            GlobalPos.CODEC.optionalFieldOf("stash").forGetter(r -> Optional.ofNullable(r.stash))
-    ).apply(i, (name, uuid, state, home, house, stash) -> {
+            GlobalPos.CODEC.optionalFieldOf("stash").forGetter(r -> Optional.ofNullable(r.stash)),
+            Codec.STRING.optionalFieldOf("identity", "").forGetter(BotRecord::identity)
+    ).apply(i, (name, uuid, state, home, house, stash, identity) -> {
         BotRecord record = new BotRecord(name, uuid, state, home.orElse(null));
         record.house = house.orElse(null);
         record.stash = stash.orElse(null);
+        record.identity = identity;
         return record;
     }));
 
@@ -49,6 +51,8 @@ public final class BotRecord {
     private @Nullable GlobalPos house;
     /** The secret chest buried under the floor, for valuables. */
     private @Nullable GlobalPos stash;
+    /** Gender and orientation for this world ("f:straight"...), rolled once: see ai/social/Identity. */
+    private String identity = "";
 
     public BotRecord(String name, UUID uuid, State state, @Nullable GlobalPos home) {
         this.name = name;
@@ -68,6 +72,8 @@ public final class BotRecord {
     public @Nullable GlobalPos home() { return this.home; }
     public @Nullable GlobalPos house() { return this.house; }
     public @Nullable GlobalPos stash() { return this.stash; }
+    public String identity() { return this.identity; }
+    void setIdentity(String identity) { this.identity = identity; }
 
     void setState(State state) { this.state = state; }
     void setHome(@Nullable GlobalPos home) { this.home = home; }

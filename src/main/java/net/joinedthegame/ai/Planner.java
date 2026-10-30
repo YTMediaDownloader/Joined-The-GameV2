@@ -46,6 +46,9 @@ public final class Planner {
     /** It's in the chests at home: go and get it rather than make more. */
     public record Fetch(Item item, int count, String label) implements Step {}
 
+    /** The end of a Fail's label when the thing can only be had in the nether. */
+    public static final String NETHER_ONLY = " is only found in the nether";
+
     private final BotPlayer bot;
     private final MinecraftServer server;
     private final boolean tableNearby;
@@ -93,6 +96,9 @@ public final class Planner {
             if (Inv.pickaxeTier(this.bot) < source.pickTier()) {
                 Step pick = resolve(source.pickaxeNeeded(), 1, depth + 1, visiting);
                 if (pick != null) return pick;
+            }
+            if (source.netherOnly() && this.bot.level().dimension() != net.minecraft.world.level.Level.NETHER) {
+                return new Fail(name(item) + NETHER_ONLY);
             }
             return new Mine(source, item, missing, verb(source));
         }
@@ -249,6 +255,8 @@ public final class Planner {
         else if (craftableFromBag(item)) score = 400;
         else if (Sources.forItem(item) != null) score = 300;
         else if (!Recipes.craftingFor(this.server, item).isEmpty()) score = 100;
+        // Only made in a furnace (netherite scrap from ancient debris): still a way to get it.
+        else if (!Recipes.smeltingFor(this.server, item).isEmpty()) score = 90;
         else return 0;
         if (item == Items.OAK_PLANKS || item == Items.OAK_LOG || item == Items.COBBLESTONE) score += 5;
         return score;

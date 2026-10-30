@@ -25,6 +25,8 @@ public final class WoolTask implements Task {
     private int ticks;
     private int repathIn;
     private int searching;
+    private boolean triedRemembered;
+    private @Nullable Task travel;
 
     /** The wool item for each dye colour, in {@link DyeColor} order. */
     public static Item wool(DyeColor color) {
@@ -63,6 +65,14 @@ public final class WoolTask implements Task {
     public Status tick(BotPlayer bot, BotBrain brain) {
         if (hasEnough(bot)) return Status.DONE;
         if (++this.ticks > 20 * 120) return Status.FAILED;
+        // String from spiders: four make a wool, no sheep needed.
+        if (Inv.count(bot, Items.STRING) >= 4 && this.ticks % 20 == 1) {
+            var step = new net.joinedthegame.ai.Planner(bot, false).next(wool(DyeColor.WHITE), Inv.count(bot, wool(DyeColor.WHITE)) + 1);
+            if (step instanceof net.joinedthegame.ai.Planner.Craft craft && CraftTask.craftNow(bot, craft)) {
+                brain.log("made wool from string");
+                return Status.RUNNING;
+            }
+        }
 
         if (this.collect != null) {
             if (this.collect.tick(bot, brain) == Status.RUNNING) return Status.RUNNING;
@@ -77,10 +87,11 @@ public final class WoolTask implements Task {
                 return Status.RUNNING;
             }
             DyeColor want = bestColor(bot);
-            List<Sheep> nearby = Senses.entitiesNear(bot, Sheep.class, 32, s -> s.isAlive() && !s.isBaby());
+            List<Sheep> nearby = Senses.entitiesNear(bot, Sheep.class, 32, s -> s.isAlive() && !s.isBaby() && Senses.wouldNotice(bot, s));
             this.target = nearby.stream().filter(s -> want == null || s.getColor() == want).findFirst()
                     .orElse(nearby.isEmpty() ? null : nearby.getFirst());
             if (this.target == null) return lookForSheep(bot, brain);
+            brain.rememberPlace(bot, "sheep", this.target.blockPosition());
             return Status.RUNNING;
         }
 
@@ -109,8 +120,29 @@ public final class WoolTask implements Task {
 
     /** No sheep in sight: head up to the surface if we're underground, then roam around. */
     private Status lookForSheep(BotPlayer bot, BotBrain brain) {
+        if (this.travel != null) {
+            Status s = this.travel.tick(bot, brain);
+            if (s == Status.RUNNING) return Status.RUNNING;
+            this.travel = null;
+        }
         if (brain.navigator().isMoving()) return Status.RUNNING;
-        if (++this.searching > 8) return Status.FAILED;
+        // Somewhere we saw sheep before: go there, rather than wander about at random.
+        if (!this.triedRemembered) {
+            this.triedRemembered = true;
+            var here = net.minecraft.core.GlobalPos.of(bot.level().dimension(), bot.blockPosition());
+            var seen = brain.memory().nearest("sheep", here, 160);
+            if (seen != null && seen.pos().distSqr(bot.blockPosition()) > 24 * 24) {
+                brain.log("going to where I saw sheep, at " + seen.pos().toShortString());
+                this.travel = new TravelTask(seen.pos(), 8, "Looking for sheep");
+                return Status.RUNNING;
+            }
+        }
+        if (++this.searching > 8) {
+            // Not there any more either: forget that spot.
+            var here = net.minecraft.core.GlobalPos.of(bot.level().dimension(), bot.blockPosition());
+            brain.memory().forgetAround("sheep", here, 32);
+            return Status.FAILED;
+        }
         net.joinedthegame.ai.Roam.tick(bot, brain.navigator());
         return Status.RUNNING;
     }

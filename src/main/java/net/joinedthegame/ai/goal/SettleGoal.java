@@ -88,13 +88,18 @@ public final class SettleGoal extends Goal {
 
     @Override
     public boolean tick(BotPlayer bot) {
-        // Teleported miles away from a site that isn't by our home either? Start over from here.
+        // Teleported away from a site that isn't by our home either? Start over from here. Only an
+        // actual teleport while this plan was on the go counts (BotBrain tells them apart):
+        // respawning at spawn after dying, or having wandered off, is a walk back to the build,
+        // however far, like a player going back to finish their house.
         // (A new house next to home is worth the walk back, however far out we've wandered.)
         // (A site by our home bed or our house, or an upgrade, is anchored there: walk back to
         // it instead. Restarting on those picked the same far-off spot again, and it flipped
         // between "looking for a place" and "getting ready to move" every tick, frozen.)
         HousePlans.Plan current = this.plan;
-        if (current != null && this.stage != Stage.MOVE && !this.upgrade && !anchored(bot, current)
+        boolean teleported = this.brain.lastTeleportAt() > this.knownTeleport;
+        this.knownTeleport = this.brain.lastTeleportAt();
+        if (current != null && teleported && this.stage != Stage.MOVE && !this.upgrade && !anchored(bot, current)
                 && current.room().distSqr(bot.blockPosition()) > 128 * 128) {
             this.brain.log("my building site is too far away now, starting over");
             if (this.task != null) this.task.stop(bot, this.brain);
@@ -174,6 +179,9 @@ public final class SettleGoal extends Goal {
     }
 
     /** Is this site by our home bed or our house (somewhere worth coming back to)? */
+    /** The last teleport this goal has already taken into account (see the top of tick). */
+    private long knownTeleport = Long.MIN_VALUE / 2;
+
     private boolean anchored(BotPlayer bot, HousePlans.Plan plan) {
         for (GlobalPos g : new GlobalPos[]{this.brain.record().home(), this.brain.record().house()}) {
             if (g != null && g.dimension() == bot.level().dimension() && plan.room().distSqr(g.pos()) < 48 * 48) return true;
@@ -192,7 +200,7 @@ public final class SettleGoal extends Goal {
         if (this.restarts.size() > 4) {
             this.brain.log("settling keeps starting over: leaving the house for now");
             this.restarts.clear();
-            this.brain.focusDone(BotBrain.Focus.NONE);
+            this.brain.focusFailed(BotBrain.Focus.HOUSE);
             cooldown(now, 20 * 60 * 10);
             return false;
         }
@@ -629,7 +637,7 @@ public final class SettleGoal extends Goal {
         if (++this.failures >= 3) {
             // Give it a rest; maybe go do something else for a while.
             this.failures = 0;
-            this.brain.focusDone(BotBrain.Focus.NONE);
+            this.brain.focusFailed(BotBrain.Focus.HOUSE);
         }
         cooldown(this.brain.now(), 20 * 60 * 2);
         return false;

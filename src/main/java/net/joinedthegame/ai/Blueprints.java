@@ -42,7 +42,22 @@ public final class Blueprints {
 
     public enum Walls { PLANKS, STONE }
 
-    public record Blueprint(String name, String label, Walls walls, String[][] layers) {
+    /**
+     * FLAT: the old flat stone roof with an overhang. GABLE: a proper pitched roof of stairs (in
+     * whatever wood grows round there), ridge running front to back, gable ends filled in.
+     */
+    public enum Roof { FLAT, GABLE }
+
+    public record Blueprint(String name, String label, Walls walls, Roof roof, String[][] layers) {
+        public Blueprint(String name, String label, Walls walls, String[][] layers) {
+            this(name, label, walls, Roof.FLAT, layers);
+        }
+
+        /** How many layers the roof itself adds above the walls. */
+        int roofLayers() {
+            return this.roof == Roof.GABLE ? (width() + 1) / 2 : 1;
+        }
+
         int width() {
             return this.layers[0][0].length();
         }
@@ -77,7 +92,7 @@ public final class Blueprints {
     }
 
     /** A cosy timber cottage: living room at the front, storage room at the back. */
-    public static final Blueprint COTTAGE = new Blueprint("cottage", "a cottage", Walls.PLANKS, new String[][]{
+    public static final Blueprint COTTAGE = new Blueprint("cottage", "a cottage", Walls.PLANKS, Roof.GABLE, new String[][]{
             {
                     "L###D###L",
                     "#T......#",
@@ -149,7 +164,7 @@ public final class Blueprints {
                     "L#######L"}});
 
     /** A long hall with a storage wing down one side: fits a narrow spot. */
-    public static final Blueprint LONGHOUSE = new Blueprint("longhouse", "a longhouse", Walls.PLANKS, new String[][]{
+    public static final Blueprint LONGHOUSE = new Blueprint("longhouse", "a longhouse", Walls.PLANKS, Roof.GABLE, new String[][]{
             {
                     "L####D####L",
                     "#C.#.....T#",
@@ -179,7 +194,7 @@ public final class Blueprints {
      * Two storeys: a workshop and storage room downstairs, a bedroom and more storage upstairs,
      * a ladder in the corner. The house a bot builds once a one-storey house is full.
      */
-    public static final Blueprint TWO_STOREY = new Blueprint("two_storey", "a two-storey house", Walls.PLANKS, new String[][]{
+    public static final Blueprint TWO_STOREY = new Blueprint("two_storey", "a two-storey house", Walls.PLANKS, Roof.GABLE, new String[][]{
             {   // ground floor
                     "L###D###L",
                     "#T.....H#",
@@ -251,10 +266,109 @@ public final class Blueprints {
                     "#.......#",
                     "L#######L"}});
 
+    /** A roomy farmhouse: a big kitchen-living room at the front, the store room behind. */
+    public static final Blueprint FARMHOUSE = new Blueprint("farmhouse", "a farmhouse", Walls.PLANKS, Roof.GABLE, new String[][]{
+            {
+                    "L####D####L",
+                    "#TF......B#",
+                    "#.........#",
+                    "#....S....#",
+                    "#.........#",
+                    "####.#.####",
+                    "#CC.....RR#",
+                    "#CC.....RR#",
+                    "L#########L"},
+            {
+                    "L#g#gdg#g#L",
+                    "#.........#",
+                    "g.........g",
+                    "#t.......t#",
+                    "g.........g",
+                    "####.#.####",
+                    "#t.......t#",
+                    "#.........#",
+                    "L###g#g###L"},
+            {
+                    "L#########L",
+                    "#.........#",
+                    "#.........#",
+                    "#.........#",
+                    "#.........#",
+                    "###########",
+                    "#.........#",
+                    "#.........#",
+                    "L#########L"}});
+
+    /** A small, wide bungalow: one big room and a store room, windows all along the front. */
+    public static final Blueprint BUNGALOW = new Blueprint("bungalow", "a bungalow", Walls.PLANKS, Roof.GABLE, new String[][]{
+            {
+                    "L##D##L",
+                    "#T...B#",
+                    "#F....#",
+                    "#..S..#",
+                    "##.####",
+                    "#CC..C#",
+                    "L#####L"},
+            {
+                    "Lg#d#gL",
+                    "#.....#",
+                    "g.....g",
+                    "#t...t#",
+                    "##.####",
+                    "#t....#",
+                    "L##g##L"},
+            {
+                    "L#####L",
+                    "#.....#",
+                    "#.....#",
+                    "#.....#",
+                    "#######",
+                    "#.....#",
+                    "L#####L"}});
+
+    /** A big timber lodge: a long hall with the hearth at one end, a workshop and a store room. */
+    public static final Blueprint LODGE = new Blueprint("lodge", "a lodge", Walls.PLANKS, Roof.GABLE, new String[][]{
+            {
+                    "L#####D#####L",
+                    "#T.........B#",
+                    "#F..........#",
+                    "#F....S.....#",
+                    "#...........#",
+                    "#...........#",
+                    "L###.#####.#L",
+                    "#RR.....#...#",
+                    "#RR.....#...#",
+                    "#.......#CCC#",
+                    "L###########L"},
+            {
+                    "L#g#g#d#g#g#L",
+                    "#...........#",
+                    "g...........g",
+                    "#t.........t#",
+                    "g...........g",
+                    "#...........#",
+                    "L###.#####.#L",
+                    "#t......#..t#",
+                    "g.......#...g",
+                    "#.......#...#",
+                    "L###g###g###L"},
+            {
+                    "L###########L",
+                    "#...........#",
+                    "#...........#",
+                    "#...........#",
+                    "#...........#",
+                    "#...........#",
+                    "L###########L",
+                    "#.......#...#",
+                    "#.......#...#",
+                    "#.......#...#",
+                    "L###########L"}});
+
     /** One-storey houses, the tier above a cabin. */
-    public static final List<Blueprint> HOUSES = List.of(COTTAGE, STONE_HOUSE, LONGHOUSE);
+    public static final List<Blueprint> HOUSES = List.of(COTTAGE, STONE_HOUSE, LONGHOUSE, FARMHOUSE, BUNGALOW);
     /** The tier above that. */
-    public static final List<Blueprint> LARGE = List.of(TWO_STOREY);
+    public static final List<Blueprint> LARGE = List.of(TWO_STOREY, LODGE);
 
     public static @Nullable Blueprint byName(String name) {
         for (Blueprint b : HOUSES) if (b.name().equals(name)) return b;
@@ -282,6 +396,8 @@ public final class Blueprints {
         return switch (b.name()) {
             case "stone_house" -> 0.3 + p.miner() * 0.8;
             case "longhouse" -> 0.3 + p.explorer() * 0.6 + p.hoarder() * 0.3;
+            case "farmhouse" -> 0.3 + p.homebody() * 0.5 + p.animalLover() * 0.5 + p.diligent() * 0.2;
+            case "bungalow" -> 0.3 + p.social() * 0.4 + (1 - p.builder()) * 0.4 + p.nomad() * 0.3;
             default -> 0.5 + p.homebody() * 0.5 + p.social() * 0.3;
         };
     }
@@ -318,6 +434,7 @@ public final class Blueprints {
         int gaps = 0;
         int clutter = 0;
         int roofY = bp.height();
+        int top = roofY + bp.roofLayers() - 1;
         for (int x = bp.minX() - 1; x <= bp.maxX() + 1; x++) {
             for (int z = -1; z <= bp.depth(); z++) {
                 boolean footprint = bp.at(x, 0, z) != ' ';
@@ -329,7 +446,7 @@ public final class Blueprints {
                         gaps++;
                     }
                 }
-                for (int y = 0; y <= roofY; y++) {
+                for (int y = 0; y <= top; y++) {
                     if (!footprint && y < roofY) continue; // only the roof's overhang sticks out
                     BlockPos c = HousePlans.at(room, f, x, y, z);
                     BlockState s = w.state(c);
@@ -360,8 +477,9 @@ public final class Blueprints {
         int roofY = bp.height();
         int minX = bp.minX(), maxX = bp.maxX(), depth = bp.depth();
         List<Step> build = new ArrayList<>();
+        int top = roofY + bp.roofLayers() - 1;
         // Clear the site, top down.
-        for (int y = roofY; y >= 0; y--) {
+        for (int y = top; y >= 0; y--) {
             for (int x = minX - 1; x <= maxX + 1; x++) {
                 for (int z = -1; z <= depth; z++) {
                     boolean footprint = bp.at(x, 0, z) != ' ';
@@ -450,25 +568,63 @@ public final class Blueprints {
                 }
             }
         }
-        // Roof: over the walls first, then inwards ring by ring, then the overhang.
-        int roof = 0;
-        int maxRing = Math.max(maxX - minX, depth);
-        for (int ring = 0; ring <= maxRing; ring++) {
-            for (int x = minX; x <= maxX; x++) {
-                for (int z = 0; z < depth; z++) {
-                    if (bp.at(x, 0, z) == ' ') continue;
-                    int d = Math.min(Math.min(x - minX, maxX - x), Math.min(z, depth - 1 - z));
-                    if (d != ring) continue;
+        int roof = 0, stairs = 0;
+        if (bp.roof() == Roof.GABLE) {
+            // A pitched roof, a layer at a time from the eaves up. Each layer: the gable ends first
+            // (the front and back walls carrying on up), then a row of stairs down each side,
+            // starting against the gable end and running along it, every stair with something to
+            // go against; the overhang at each end last. Odd widths finish with a ridge.
+            Predicate<ItemStack> stair = s -> s.is(ItemTags.WOODEN_STAIRS);
+            Direction upLeft = toWorld(f, 1, 0), upRight = toWorld(f, -1, 0);
+            for (int k = 0; ; k++) {
+                int left = minX + k, right = maxX - k, y = roofY + k;
+                if (left > right) break;
+                for (int z : new int[]{0, depth - 1}) {
+                    for (int x = left + 1; x <= right - 1; x++) {
+                        build.add(Step.place(HousePlans.at(room, f, x, y, z), wall));
+                        walls++;
+                    }
+                }
+                if (left == right) {
+                    // The ridge: along the top, then the overhang at each end (with the ridge
+                    // block next to it to go against).
+                    for (int z = 0; z < depth; z++) build.add(Step.place(HousePlans.at(room, f, left, y, z), wall));
+                    build.add(Step.place(HousePlans.at(room, f, left, y, -1), wall));
+                    build.add(Step.place(HousePlans.at(room, f, left, y, depth), wall));
+                    walls += depth + 2;
+                    break;
+                }
+                for (int side : new int[]{left, right}) {
+                    Direction face = side == left ? upLeft : upRight;
+                    for (int z = 0; z < depth; z++) {
+                        build.add(Step.placeFacing(HousePlans.at(room, f, side, y, z), stair, face));
+                        stairs++;
+                    }
+                    build.add(Step.placeFacing(HousePlans.at(room, f, side, y, -1), stair, face));
+                    build.add(Step.placeFacing(HousePlans.at(room, f, side, y, depth), stair, face));
+                    stairs += 2;
+                }
+            }
+        } else {
+            // Flat: over the walls first, then inwards ring by ring, then the overhang.
+            int maxRing = Math.max(maxX - minX, depth);
+            for (int ring = 0; ring <= maxRing; ring++) {
+                for (int x = minX; x <= maxX; x++) {
+                    for (int z = 0; z < depth; z++) {
+                        if (bp.at(x, 0, z) == ' ') continue;
+                        int d = Math.min(Math.min(x - minX, maxX - x), Math.min(z, depth - 1 - z));
+                        if (d != ring) continue;
+                        build.add(Step.place(HousePlans.at(room, f, x, roofY, z), HousePlans::isRoofBlock));
+                        roof++;
+                    }
+                }
+            }
+            for (int x = minX - 1; x <= maxX + 1; x++) {
+                for (int z = -1; z <= depth; z++) {
+                    if (x >= minX && x <= maxX && z >= 0 && z < depth) continue;
                     build.add(Step.place(HousePlans.at(room, f, x, roofY, z), HousePlans::isRoofBlock));
                     roof++;
                 }
-            }
-        }
-        for (int x = minX - 1; x <= maxX + 1; x++) {
-            for (int z = -1; z <= depth; z++) {
-                if (x >= minX && x <= maxX && z >= 0 && z < depth) continue;
-                build.add(Step.place(HousePlans.at(room, f, x, roofY, z), HousePlans::isRoofBlock));
-                roof++;
             }
         }
         // The door last, so walking in and out while building is easy.
@@ -553,6 +709,7 @@ public final class Blueprints {
                 Tasks.Need.nice("glass", s -> s.is(Items.GLASS), glass, bot -> Items.GLASS),
                 Tasks.Need.nice("torches", s -> s.is(Items.TORCH), torches, bot -> Items.TORCH)));
         if (ladders > 0) needs.add(Tasks.Need.of("ladders", s -> s.is(Items.LADDER), ladders, bot -> Items.LADDER));
+        if (stairs > 0) needs.add(Tasks.Need.of("stairs", s -> s.is(ItemTags.WOODEN_STAIRS), stairs, bot -> Wood.preferred(bot, "stairs")));
         if (barrels > 0) needs.add(Tasks.Need.nice("barrels", s -> s.is(Items.BARREL), barrels, bot -> Items.BARREL));
         return new Plan(Type.HOUSE, room, f, HousePlans.keepWhatsBuilt(build, furnish), furnish, bedFoot, stash, 0, List.copyOf(needs), bp.name());
     }

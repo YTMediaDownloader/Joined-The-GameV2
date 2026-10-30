@@ -5,6 +5,375 @@ Jars from 0.3.2 on are kept in [`releases/`](releases/). Earlier ones weren't sa
 
 ---
 
+## 0.9.1 Fixes from the 0.9.0 test (in progress)
+- **Bots stuck together in a hole.** Three bots followed each other down one bot's one-wide hole after the same stone, then all tried to pillar out from the same block. The game won't put a block down where someone's standing, so they hopped on the spot for 20 seconds, wiggled, and walked back in. Now:
+  - paths never plan a block where somebody is standing (a bot squeezed in with others digs a step out instead), and squeezing into someone's spot costs extra;
+  - if someone steps into the spot after the path was planned, the bot gives them a moment, then finds another way;
+  - when looking for stone (or anything but wood), a bot skips blocks somebody's already standing right by: stone's everywhere.
+  - Tested: three bots dropped into the same one-wide, four-deep shaft each dug their own way out, in different directions, within 15 seconds.
+- **Bots shoving into each other at spawn.** Everyone starts in the same spot and went for the same little patch of stone; a bot trying to step onto a block three others stood on got pushed back, again and again (Duckatyt for 30 seconds). Now a step somebody's standing on counts as reached once the bot is close (it'd only be shoved off the middle), and a bot that's being pushed back by people goes round after a second instead of shoving for three. Plus the stone personal-space rule above, so they spread out to begin with.
+- **"Crafting a stone pickaxe" after dying.** GeminiTay died to a skeleton and her status kept saying what she was doing before, while she'd actually decided her stuff was guarded. Two fixes:
+  - When a bot holds off on getting its stuff back, the reason now shows next to what it's doing in the bot list: "(my stuff's guarded by a skeleton, waiting for it to leave)" or "(not going back for my stuff in the dark)", sleeping included.
+  - Dying wipes the mining/crafting plan it was halfway through (it was carrying on with a plan for a bag it no longer had); it thinks again from what it's got.
+- **Accidental sword sweeps started fights to the death.** PenTester and Redlantern went for the same sheep; PenTester's sword sweep caught Redlantern, who took it as an attack, and "self defence" on both sides ended with Redlantern dead. Now:
+  - Bots mostly don't sweep with someone (a player, a pet, a villager, a golem) stood by what they're hitting, but careless and reckless ones don't always look first.
+  - A bot caught by someone's sweep at something else knows it was an accident: a small dent in liking, no fight. Rarely it's taken badly anyway and swung back at, like people do: a few percent for easygoing bots, up to about a fifth for hot-headed, unforgiving ones, much likelier with someone they already dislike or after repeat accidents. Friends and partners never; rivals always. Works for real players' sweeps too.
+  - Tested: four bots crowding one zombie caught each other three times; all three were shrugged off.
+
+- **The bot named after you was loading your stuff.** In singleplayer, vanilla decides who owns the world by name alone, so the Redlantern8808 bot in Redlantern8808's world counted as the owner: every time it joined it loaded the player's own saved inventory (guide book and all), it got operator powers, and if it had ever disconnected the game would have shut the world down as if the player had quit. Now the owner is whoever has the owner's account id; a bot has its own id, so it's just a bot with the same name. (Your own inventory was never overwritten: saves go by id.) Any guide book a bot is carrying is dropped from its inventory when it joins.
+
+- **Bots froze when hit, even mid-fight.** Every punch from a player still did the oldest thing in the mod: drop everything, stop following, stare for a few seconds, put the job off for half a minute, outranking even fighting back. So LeBronJames decided to defend himself and then stood staring while he was beaten to death; later, mid-fight, he stopped swinging every time he was hit. Punches are reworked:
+  - In a fight already: a hit's just part of the fight. A hit with anything in hand: an attack (feelings, self defence), no freezing.
+  - A bare-hand tap is "hey!": the bot glances at you and carries on (still following you, if it was); a friend crouches hello back.
+  - Tapping over and over (four in a few seconds) gets annoying: friends and the very sociable put up with it, others like you a bit less, and a hot-headed one may shove you back. Past eight, it's not a joke any more: from then on it counts as an attack.
+  - A bot following you stops if you attack it.
+- **Tagging along with their killer.** Ten seconds after respawning, LeBron was "Exploring with you" with the player who'd just killed him. Tagging along when you explore, and mining beside you, now skip anyone the bot dislikes, a rival, or someone who's gone for it in the last five minutes (and asking it to come along gets "they just went for me").
+- **One crouch, five invites.** A crouch (or a quick bob) counted as several "come with me?"s; now one.
+- **Bot list: the reason got cut off.** "(not going back for my stuff...)" ran off the end of the row. The reason now sits on the name line in its own colour, shorter ("leaving my stuff till morning", "my stuff's guarded by a skeleton"), and hovering a row shows the whole thing.
+
+- **Hit and run worked every time.** Self-defence stops six seconds after the last hit (so one punch doesn't mean a chase across the map), which meant hit, run, come back, hit again, for ever. Now bots remember who hit them for five minutes, counting each hit-and-run as a round. When that person turns up again (after actually going off: out of sight or well away), the bot decides whether to go for them: likely, and likelier each round, for the brave and the unforgiving; an easygoing one may just keep an eye on them; a close friend lets it go. After two rounds it stops falling for the "back off for six seconds" trick and chases like a rival. Either of them dying settles it.
+- **Knocked to their death didn't count.** "redlantern8808 was doomed to fall by LeBronJames": the mod only counted the killing blow, so LeBron didn't know he'd won, didn't loot, and only picked up the odd useful thing out of habit. Kills now go by the game's own kill credit (knocked off a ledge, into lava or the water), for bots dying that way too.
+- **Bots stood by a pile picking up nothing.** Picking up drops went for the nearest item and nothing else until it was picked up, so one caught somewhere out of reach (up in a dark oak's leaves) had LeBron standing by his own pile, then a rival's, empty-handed until time ran out. Now an item that won't come after a few seconds gets knocked loose (the leaves it's caught in, if they're in reach) or left, and the rest get picked up.
+- **Getting high up, or walling yourself in, made you safe from bots.** In a fight they only ever tried to walk to you. Now, getting no closer:
+  - up a pillar near them: they knock the block out from under you, and keep going till you're down;
+  - walled in, boxed up, behind a door: they break through what's between you (yours or not: it's a fight). Not obsidian-hard blocks or chests.
+  - Tested: Dan broke into a cobblestone box at eye level; then took a five-high pillar down from under Gemini and landed 23 hits.
+- **Fighters judged reach feet to feet.** A bot at the foot of a pillar was "too far" to hit someone standing just over it, and not far enough to move, so it stood there. Reach is now the game's own (eyes to the nearest part of them), and close-but-can't-hit means doing something about it.
+
+- **Everyone in two little holes (stress test).** All the bots start together and went for the one patch of stone in sight: 8 to 10 of them mining in two spots a few blocks across, three getting stuck on each other (LeBron, Benny and Redlantern took turns standing on the same block). The personal-space rule only covered a bot's first look for stone; the close-by fallbacks ignored it. Now it covers every search, and in a crowd (two or more digging within five blocks) a bot doesn't look there at all: it heads off its own way, away from them, and staircases down there ("too many people digging here: off my own way (north)"). Tested: six fresh bots dropped on one spot by one small patch of stone spread out and had stone tools within about a minute, nobody stuck.
+- **Crafting tables in a tight spot.** In a one-wide staircase there was "nowhere" to put a table (only open spots counted), so crafting failed over and over ("couldn't place table at null"). Now a hemmed-in bot digs a nook in the wall and sets the table there. And a spot somebody's standing on is skipped: the game won't put a block down on anyone, which is why DanTDM's table failed three times in the crowd.
+
+- **Anything that happened to a bot the moment it joined was forgotten.** A bot's brain started with a blank memory and only picked up its real, saved one on its first tick, so whatever came in between (feelings set as it arrived, a hello, a hit) went into the blank one and was lost. Found in a team battle: teammates set as close friends came in still hating each other from the round before, and killed each other. Now the brain has the bot's own memory from the moment it spawns. Tested: five teams of two, nobody touched a teammate (Redlantern8808 and Duckatyt won it together).
+
+**New: live bot snapshot (testing jar).** `logs/joinedthegame-bots.json`, next to the debug log, rewritten every five seconds while the game runs: every bot online with where it is, health, food, what it's doing and why (goal, focus, any "holding off" reason), who it is, its home and house, where its stuff is if it died, everything it's wearing and carrying (counts, durability, enchantments), and how it feels about everyone it knows. Plus the real players' positions, the day and the time. Plain JSON, swapped in whole each time so it's never half-written: anyone (a person, a script, another AI) can open it mid-game for the state of things now, instead of digging back through the log.
+
+**New: Frost Walker.** Bots wearing Frost Walker boots (from a ruined portal chest or an enchanting table) now walk straight across still water on the ice they make, instead of planning a swim, ending up on top of the ice and pacing back and forth. Tested: 15 blocks of pond crossed on foot in about 5 seconds.
+
+## 0.9.0 Living, together (the full release)
+The biggest update yet, all in one: bots that live like people (needs, a plan for the day, taking it easy, knowing when not to interrupt), the building update (pitched roofs, new houses, pens, tree farms, gardens, paths), the new roster, and relationships: feelings, friends, rivals, John Wick, romance and living together. The previews (pre1 to pre5, below) have the details; this is what's new since pre5.
+
+**Living together** (part 3, step 5)
+- Partners who've been together a while move in together: the one with the lesser home (a hut, or a smaller house; the less homely one if they're even) brings a bed, its own or a new one, and puts it down beside its partner's, inside. It beats carrying on with a place of its own.
+- From then on it's home to both: the same chests (what's in them is shared, not stolen), beds side by side.
+- Houses aren't re-built once they're finished, so changes a partner makes stick.
+- Break up, and the one who moved in moves out, and won't move back into the ex's place by accident (its old bed there looks free).
+
+**Crouching at a bot (reworked: it hadn't changed since the first version)**
+- Crouching near a bot is saying hi: it crouches back and it counts like any hello (you get to know each other a little better, once every ten minutes). A bot that can't stand you just gives you a look.
+- Crouching while looking right at it is asking it to come along, and the answer is how it feels about you: a partner or close friend comes for the full time (followSeconds, 5 minutes by default), a friend for a while, someone who likes you for a bit; a stranger only if it's the sociable sort, and only briefly; one that dislikes you, or a rival, says no. The debug log says why.
+
+**Getting to know each other early on**
+- Saying hi: a sociable bot passing someone it barely knows (close by, daytime, safe) goes over and crouches hello; the other stops a moment and says it back. A couple of seconds, then back to work. Both know each other a little better and warm a little. Once per person every ten minutes, one hello every three minutes at most; loners hardly bother.
+- Company is easier to come by: very sociable bots will visit someone they just know a bit, a little further away, and time spent around each other counts from a bit further off.
+
+---
+
+## 0.9.0-pre5 Love (preview)
+Part three of 0.9.0, step 4: romance. Everything in pre4, plus:
+
+**Romance** (between bots only; no sexual content, ever)
+- Every bot has a gender and an orientation: straight, gay, lesbian or bi. Gender follows the roster. Orientation is rolled once per world and saved (the same bot can be different in another world: the bots are fictional versions, not claims about anyone). Fixed by request: Redlantern8808 (male, straight), Duckatyt (male, bi), cozmoiscool130 (male, straight). `/jtg debug <bot>` shows it.
+- Attraction grows only between bots who could be into each other, and only once they're good friends who know each other well: time together, help, gifts. A romantic sort falls harder, and personalities that fit (alike in what matters day to day) speed it up. It can be one-sided (a crush).
+- At the end of some time together, a bot that's really into someone (and isn't with anyone) may ask them out, giving them a flower first if it has one. They say yes or no from their own feelings. A no is awkward, not a grudge: it won't ask again for a while.
+- Someone who's already with someone says no, and their partner, if they see it, doesn't like the one asking (jealousy can grow into a rivalry).
+- Partners: go to each other first for company (and want it more often), bring each other along when they take it easy, share food sooner, give each other flowers, and jump into each other's fights first.
+- Breakups: betrayal ends it at once (hurting them, killing their pet, taking their stuff, a broken truce), falling out ends it, and partners who don't see each other for days drift apart. Exes keep their distance for a couple of days.
+- `/jtg relationships` shows partners, exes and crushes.
+
+**Fixed**
+- Hiding for the night out in the open: water beside a bot counted as a wall and leaves over its head as a roof, so a bot at the edge of a pond under a tree "hid" without digging at all, and then flip-flopped between hiding and mining. Now only full solid blocks count as cover, and a bot about to dig in beside water walks a few steps to dry ground first.
+- Holes dug beside water (hiding, or a path digging down) flooded and trapped bots, sometimes other bots that fell in. Bots don't dig down beside water any more.
+- A John Wick hunting spell carried on into the night: it ends at nightfall unless the bot's geared for the dark.
+- A visit to a busy friend never ended (they kept moving off): trailing after them counts, and a visit wraps up after six minutes at most.
+- Accepting a partner's invite while mining: it goes, instead of saying yes and carrying on mining.
+
+Testing: `/jtg debug <bot> partner <other>` puts two bots together; `/jtg debug <bot> feel` takes an attraction too.
+
+---
+
+## 0.9.0-pre4 Rivals (preview)
+Part three of 0.9.0, step 3: rivalries. Everything in pre3, plus:
+
+**Rivals**
+- Bad enough history (repeated theft, being killed, a broken truce...) and two bots become sworn enemies: how bad depends on who they are (vengeful bots get there sooner, forgiving ones hardly ever). Bots can become your rival too.
+- Rivals who run into each other usually fight (about 90% for the deepest hatred), once per meeting. A real fight: best weapon, waiting for a full swing, jumping for crits, stepping back out of reach, strafing, shield up when the other's ready to swing, a bow at range. Never while drowning, hurt, dug in for the night or with mobs about.
+- The first fight makes it mutual.
+- Self-defence: hit someone for real (not a friendly tap) and they hit back, until you stop. A close friend's hit is taken as an accident.
+- Not always 1v1: a close friend of one fighter jumps in on their side (if they don't like the other one). Whoever gets ganged up on remembers it.
+
+**Peace (the only time bots talk)**
+- Losing badly or outnumbered, a bot may call peace in chat ("ok ok, truce?"), backing off while it waits. The other answers ("fine." / "no."), holding off while it thinks: a forgiving bot with no long grudge often says yes; a winning one, or one with a long history of bad blood, usually says no. Proud bots call it less, and their lines are gruffer.
+- Yes: they back off, and a truce holds for a day. Vengeful bots sometimes break one, and nobody forgets that.
+- Killing someone who called peace (refused, or never answered) is remembered for good, and any bot that saw it thinks less of the killer.
+- You can join in: when a bot calls peace on you, say peace / truce / ok / fine to accept, or no (silence is a no). Or say peace or truce yourself near a bot fighting you.
+- Making up is very rare: rivals under a truce, something good between them, a forgiving bot. They become neutral, not friends.
+
+**Getting away**
+- A bot that decides a fight isn't worth it never digs in: it runs home (shutting the door behind it) or to its friends, shield up when they're on its heels, an ender pearl if it has one. Chasers give up after a while (sooner the less they care).
+
+**Winning**
+- The loser's stuff is taken only when the hatred runs deep. The loser finds out.
+
+**Pets**
+- Killing a pet only counts on purpose (a hit aimed at it, or something shot at it; not a sweep, an explosion, fire or lava). Killing a pet that went for you first is self-defence: it hurts, but less.
+- Some bots kill pets: out of spite (deep hatred of the owner), or because they're pranksters (a new trait, mischief: PenTester, Grian, Duckatyt and markiplier have the most). Yours too.
+- The owner's reaction is who they are: peaceful bots grieve and go and find a new pet, middling ones make the killer their rival, and the most vengeful go John Wick (certain for JackBlack, Duckatyt and markiplier).
+- John Wick: maximum hatred, for good. It hunts the killer in spells (going out to find them, then getting on with life a while), and the moment the killer shows up it drops everything and goes for them. It never calls or takes peace, never retreats (staying alive aside: it still eats, breathes and heals first) and always loots.
+
+**Config**
+- `rivalries`, `playerRivalries` and `fightsToTheDeath` (off: fights end once someone's badly hurt).
+
+Testing: `/jtg debug <bot> spite` sends a bot after the nearest pet it isn't fond of.
+
+---
+
+## 0.9.0-pre3 Friends (preview)
+Part three of 0.9.0, step 2: friendship. Everything in pre2, plus:
+
+**Company**
+- A new need, Social: bots want company now and then (sociable ones more often). When they do, they go and find someone they like, another bot or you, and spend a few minutes with them: tagging along if they're busy, standing about if they're not. Both sides count it: a bot that comes to see another one gives them company too.
+- Who they go to see depends on how they feel: someone they like and know, never someone they dislike.
+- Being around someone you don't mind slowly warms you to them, so bots who keep crossing paths drift into liking each other.
+
+**Friends** (a bot likes them well: friends with you counts too)
+- Friends share food: a bot with food to spare walks over and throws some to a hungry friend, you included. A bot friend who catches it is grateful. Starving friends come first, before chores.
+- Friends defend each other: a bot steps in when a mob goes for a friend. It still helps real players by default, but not one it dislikes. Whoever was saved knows it, even if the mob turned on the helper before it died.
+- Friends muck in: working the same tree as a friend isn't competition, and picking up a friend's logs isn't stealing. A friend helping themselves gets let go.
+
+**Keeping their distance**
+- A bot that dislikes someone keeps away from them: it won't chop near them, won't visit them, and won't step in for them.
+
+**Fixed along the way**
+- `/jtg focus <bot> leisure` (and the new `social`) ran out the moment it was set.
+- A visit under way isn't cut short by its time running out.
+
+Testing: `/jtg debug <bot> feel <other> <liking> <familiarity>` sets how a bot feels about someone.
+
+---
+
+## 0.9.0-pre2 The new roster (preview)
+Everything in pre1, plus the roster overhaul.
+
+**Who joins now**
+- 46 new default names: celebrities, Minecraft YouTubers and creators, and the original regulars who stayed (Redlantern8808, Duckatyt, cozmoiscool130, TorchBearer99, BedrockBenny, PixelPickle, AxolotlAndy, MudMuncher), plus PenTester, the buggy idiot.
+- The random generic names are retired from new rosters. Bots already living in an old world keep their names, and the new names are added to that world's roster alongside them.
+- Every new name has its own (made-up) personality.
+
+**Skins**
+- Creators with a real Minecraft account use their real skin.
+- Everyone else gets a drawn skin bundled with the mod, with wide or slim arms as fits.
+- Jack Black is dressed as his Steve from A Minecraft Movie: cyan tee, jeans, brown boots, full beard.
+- To swap any skin, put a PNG named after the bot (lower case, like `sabrinacarpenter.png`) in `config/joinedthegame/skins/`.
+
+**Sharing (a first taste of relationships)**
+- Bots can see what others are working: the tree someone's chopping (the whole tree, every log joined to it, however tall) or the vein someone's digging. With other trees about, they go for their own instead of all piling onto one.
+- The only tree about and someone's on it: each bot decides once, by who it is. A selfish one (reckless, a hoarder, not one for company) goes for it too; a patient one waits its turn, standing back out of the way, and carries on when they're done (up to a minute and a half); the rest leave it to them and look elsewhere. First come, first served: stepping away for a moment to pick up the drops doesn't stop it being yours.
+- Competing isn't stealing. Chopping the same tree is competition. Picking up logs someone else chopped off their own tree is taking what's theirs: much rarer, mostly the selfish ones, and never by a bot that chose to wait for or leave that tree. Logs off a tree you'd piled in on aren't anybody's in particular; logs that came off your own tree are just your wood back.
+- They only remember what they notice: a bot whose tree gets crowded, or whose logs get taken, remembers it only if it saw (close enough, nothing in the way). Crowding counts once per pile-in, not once per armful.
+- These go in the diary as their own kinds of memory (went for the same tree, piled in on my tree, took what they'd chopped, they took what I'd chopped, waited my turn, left a tree to them), ready for relationships, trust and grudges in part three. For now a little bad blood from what someone did makes a bot a bit more likely to do it back ("after last time"); one stolen log is never a feud.
+
+**Feelings (part 3, step 1: the start of relationships)**
+- Every bot now has its own feelings about everyone it has met, other bots and real players alike: liking, trust and how well it knows them. Saved with the bot, one-sided (what one bot thinks of you is only in its memory). See them with `/jtg relationships <bot>`.
+- Built from what actually happens:
+  - getting to know someone: meeting them, time spent around them;
+  - being hit (a friendly empty-handed punch to get a bot's attention doesn't count);
+  - being killed (the killing blow isn't counted twice);
+  - a player giving them something useful (toss it to them: the good stuff, food when they're hungry, anything useful; junk means nothing);
+  - someone killing a mob that was going for them;
+  - from the tree sharing: someone piling in on their tree, taking what they chopped, or waiting their turn.
+- Personality decides how much it matters: bad things hit vengeful bots harder and forgiving ones softer, good things mean more to sociable bots.
+- Feelings fade slowly over in-game days, bad ones slower than good ones, but never all the way: part of everything sticks for good (more of the bad, half of being killed), so they always remember what you did. People they haven't seen for days get half forgotten ("barely knows them, but remembers what they did").
+- In an older world, the first time a bot has feelings about someone it already has history with, the diary counts (who it met, who crowded its tree, who took its logs).
+
+**Fixes**
+- Taking it easy only when it's actually safe: not while hurt, not within a minute of being attacked, not with anything hostile nearby, and not while its stuff is lying where it died. (A bot hiding from a skeleton on 8 hp climbed out of its hole to go and take in the view, and was shot.)
+- Dying ends whatever it was off to enjoy. Before, a bot that died on the way to a view walked straight back to the same hilltop after respawning (still "Taking in the view") instead of going for its stuff.
+- A view spot is never picked near where it died or a place it's died before.
+- When its stuff is guarded (a skeleton still standing over it), the bot now says so in the debug log and gets on with other things, then goes back for it once the coast is clear.
+- Caught out in the water at nightfall (three bots in one AFK test): under the surface the game counts the sky as hidden, so "dig in for the night" switched itself off, a wander floated the bot back up, it switched on again and failed to dig in the water, every few seconds for up to the whole night. Now being in open water after dark is its own plan, and Shelter keeps the bot all night:
+  - At the surface: swims for the nearest dry ground it can climb out onto, climbs out at the bank like a player, and digs in there.
+  - Under the surface: swims up as it goes (coming up for air still takes over at once if it's running out).
+  - No land in sight: heads back towards the last dry ground it stood on, a stretch at a time, watching for nearer land on the way.
+  - No idea where land is: treads water at the surface and keeps looking, instead of flipping between goals.
+  - A dry cave isn't any of this: the bot carries on mining or sits tight like before.
+- Chopping their own house for wood (and other bots' houses, and villages): any log counted as wood, and a house's corner posts and beams look just like a trunk. Now wood comes off trees only. A log counts as a tree's if the logs joined to it have the tree's own leaves near the top (natural leaves, which players can't place; decorating a house with leaves doesn't make it a tree), or it's a fallen log lying on the ground; and anything touching building stuff (planks, stairs, slabs, doors, fences, glass, cobble, bricks, lanterns...) is a building, never wood, whatever leaves are about. Acacias, big oaks, cherries, dark oaks, mangroves, giant jungle trees and fallen logs all still count. No tree in sight: it goes looking further off rather than starting on its roof.
+- Trees seen from afar that turn out to have no wood it can get at (all out of reach, or just leaves): marked as a dud for ten minutes, instead of walking back to the same spot again and again. A treetop straight overhead isn't "in the distance" either (a bot under a tall half-chopped spruce kept "heading over" to where it was standing).
+- Picking up items: giving up on one (out of reach, or not worth digging for) now gives up on the pile of the same stuff with it, instead of starting and giving up on each one in turn.
+- A crafting step planned before something else came first (building, putting stuff away) and its ingredients gone: the debug log now says so and it re-plans, instead of "recipe didn't match".
+- Testing: `/jtg debug <bot> tree <pos>` says whether bots would chop that log and why not; `/jtg debug <bot> home <pos>` sets a bot's home.
+- Looking for trees from the sea (JackBlack, respawning in an ocean at world spawn, went over an hour without a single log): with no tree within 24 blocks, a bot walked 20-40 blocks in a new random direction each time, which at sea just goes round in circles. Now it spots trees on the horizon the way a player does (treetops up to 96 blocks off, an island or a wood across a plain) and heads straight over. With none in view it keeps one heading instead of turning at random every few steps (back towards the last dry ground it stood on, if it's in the water), and only turns when it's blocked.
+- Building a house, died and respawned at spawn: it walks back to finish it now. A site more than 128 blocks away counted as "teleported miles away" and the half-built house was thrown away. Bots now know a respawn from a teleport (a jump of 32+ blocks in one tick, just after dying or not): only an actual teleport mid-build starts the house over somewhere new. Both show in the debug log ("respawned 408 blocks from where I died", "teleported 714 blocks").
+
+---
+
+## 0.9.0-pre1 Living, not looping (preview)
+The biggest update yet: bots that live like people instead of climbing a ladder, a building update, then the new roster and relationships. See DESIGN_0.9.0.md.
+
+**A life, not a ladder**
+- Needs instead of a ladder: gear, food, a home, wealth, curiosity, creativity, comfort, adventure, knowledge, rest. Each one rises and falls with the bot's situation, and each bot's personality decides how much each matters (`/jtg debug` shows them).
+- What a bot sets out to do next is picked by what it needs, with odds by appeal, not always the top one: two bots in the same spot go different ways. The old "full iron before anything else" lock is gone: a bot that badly wants a home builds one with stone tools, like real players do. Dangerous things (raids, trial chambers, netherite, the nether) still wait until it's geared for them.
+- Boredom: whatever it just did is less appealing for a while. Things that just went wrong are put off a while.
+- A plan for the day: each morning two or three things it means to get done today, which pull extra until they're done.
+- Taking it easy: a new need (rest) and a new thing to do. Fishing (a real fishing rod, cast, watch the bobber, reel in when it bites), sitting by a campfire at home (built the first time), climbing somewhere high to take in the view, or a stroll round its own place.
+
+**Knowing when not to interrupt**
+- The longer a bot's been at something, the more it takes to pull it away (emergencies still cut straight through).
+- A goal that takes over and quits at once, with nothing to show for it, waits longer and longer before it can try again.
+- Flip-flopping between two goals gets caught: it sticks with one for a while. Chopping and changing between lots of goals: it settles down.
+- A big thing (a garden, a house) is never dropped for another big thing half way: the next one's only picked once it's done or has failed.
+- Fixed: making a chest for storage and making a crafting table took turns grabbing the same wood.
+
+**Building**
+- Proper pitched roofs: stairs in the local wood, gable ends filled in, overhangs. The cottage, longhouse and two-storey house have them now (the stone house keeps its flat stone roof).
+- New houses: a farmhouse, a bungalow, and a big lodge (the top tier, with the two-storey house).
+- New personal projects: an animal pen (built, then animals led in by holding their favourite food, then bred), a tree farm, a sugar cane patch by the water, a flower garden, and paths (dug with a shovel from the door to the farm, garden, pen and the rest, with lamp posts).
+
+**Fixes found along the way**
+- Hiding from a skeleton: the tunnel out stays underground and under cover the whole way (one along a hillside came out right in front of the skeleton). Getting your stuff back after dying: not while a skeleton is still standing over it (unless it's about to vanish).
+- Mining at night from a hole: routes stay under cover, instead of wandering back up to the surface and getting sent back down.
+
+---
+
+## 0.8.1 Bug fixes
+**Nether portals**
+- Half-built portals: a bot that ran short of obsidian half way through the frame (some went in a chest at home) gave the whole trip up and started a new frame somewhere else next time. Now it goes and gets the rest (chests and stash first) and finishes the same frame, and a half-built frame from an earlier trip is remembered and finished rather than left standing.
+- The portal kit (obsidian, flint and steel, the gold helmet) stays on a bot for any nether trip, netherite ones included, instead of being put away at home before it's built.
+- A gold helmet isn't thrown out as "old gear" any more: one piece of gold armour is nether kit, not junk.
+- Getting something ready for a trip (a gold helmet, say) and it turns up anyway: it stops going for it.
+
+**Obsidian from lava**
+- Bots remember lava pools they've seen and go back to one when there's none in sight, instead of digging off down a staircase to look.
+- The obsidian deadlock: to pour, a bot wanted an open gap right beside the lava at its own level, which almost no real pool has (they sit in a dip with ground all round). So it walked up to the lava, couldn't use it, left, and came back. Now it pours on top of the rim, the way a player does, and the water runs over onto the lava.
+- All four sides of a pool are tried before giving up on it, and the bucket's real reach is used.
+
+**Big goals keep going**
+- A nether trip or a house build under way isn't dropped by the "full iron gear first" rule when a tool or armour piece wears out mid-way (projects already weren't).
+- Unfinished projects are remembered (kept over restarts): one that was set aside, or couldn't carry on just then, gets picked up again later, and pulls harder when a new big goal is chosen.
+
+**Spawners and dungeons**
+- A dungeon or mineshaft spawner is dealt with like a player would: get to it (digging in if need be), break it with a pickaxe, and go through the dungeon's chests, instead of fighting what comes out of it for ever. Overworld only (blaze spawners are what nether trips are for), and only when fit for it.
+
+**Remembering what's at home**
+- Chests round the house a bot built count as home storage, not just the ones near its bed (a longhouse's or two-storey house's storage room can be further off), so it doesn't go mining iron it's already got a stack of.
+- At home it takes a fresh look in its chests every half minute, so things put in them while it was out don't go unnoticed.
+
+**Not drowning**
+- Out of air under water, a bot drops everything (fights included) and swims to the nearest place its head will be out of the water: sideways under a ceiling to a shaft or a gap, not just straight up into the rock. Under a ceiling it goes before the air gets low. With nowhere to swim to, it digs up towards the air. Before, it only held jump, which under any ceiling (a flooded tunnel it had just dug into, an underwater cave) meant drowning with air a few blocks away.
+
+**From a 20-minute test in a fresh world (10 bots)**
+- Sheep hunts failed over and over (every bot, every couple of minutes: ten bots soon hunt an area out). Now four string make a wool (no sheep needed), bots remember where they saw sheep and go there instead of wandering, and a hunt that comes to nothing waits longer each time (up to 20 minutes) before the next.
+- Nights wasted: a bot in a shelter hole that wasn't perfectly sealed sat still all night (up to nine minutes) instead of mining from it. Two blocks down with walls most of the way round now counts as safe to mine from (down and sideways only, never up into the open).
+- Reckless bots skipped sheltering at night with stone tools and no armour, and died. Reckless now still needs a shield or a couple of armour pieces before it stays out.
+
+**Loops found in your debug log**
+- The place-a-block, mine-it, jump, place-it-again loop: mining and picking up items were taking turns every couple of seconds. Every block mined dropped an item; an item up on a ledge got a pillar built to it; mining then dug back down through the pillar (dropping more). Bots won't build or dig their way to a bit of cobblestone or dirt any more (still will for ore, food, logs, valuables), and they stick to the item they picked.
+- Digging in for the night and "looking for a home" took turns all night: climb out to go house-hunting, get sent back down the hole, climb out... No house-hunting in the dark now unless the bot's geared for it (or already deep underground, where it makes a home right there).
+
+**Staring at a block and never swinging**
+- Picking up items was allowed to break into a mining job for any item at all, every second or two (and with the new "don't build your way to cobblestone" rule it often gave up straight after). Each time, the mining job's route and swing started over, so the bot stood facing the block and never broke it, until the "stuck" timer moved it on to another block, and the same again. Now only something valuable interrupts mining; the mining job picks up its own drops as it goes.
+- The block breaker remembers progress on the last few blocks, not just one: anything that switched it between two blocks used to start both from nothing every time (and each restart waits to turn and face the block first, so there was no swinging at all).
+- "In reach" means the same thing to the walking and the breaking now: the bot could "arrive" somewhere the breaker said was too far, and just stand there.
+- The stuck watchdog counts blocks actually broken, not "partway through one" (chipping at a block that never breaks used to count as busy for ever), and logs a full snapshot when it fires (testing jar).
+- Hiding for the night: a lid with nothing to rest against (a hole only two deep) was tried for ever, the bot frozen in its hole. It gives up after two seconds and waits it out down there.
+
+**Skeletons and digging in**
+- Holed up from a skeleton, bots used to pop out as soon as nothing was within 3 blocks, get shot, dig in again, over and over until the skeleton walked in on them. Now the bot remembers the archer that sent it down, counts any archer that's after it or has a clear shot at the hole (a skeleton 12 blocks off with a view is worse than one 8 off behind a wall), and only comes out after 10 quiet seconds. Healed up and it's a fight it'd win: it goes and finishes it. Not a fight it'd win: after 45 seconds it tunnels off underground, 14 blocks away from the skeleton, and comes up somewhere else. Never a nine-minute underground vacation: 90 seconds at most.
+- Archers count as dangerous at any range (arrows don't care how far off they are), so "healed up, go and fight it" can't disagree with "not a fight I'd win" any more.
+- New: routes that must stay underground (the tunnel out can't just go up and over, past the skeleton).
+
+**Tools**
+- Mining with a sword: the tool was only picked at the start of a block, so a fight or a torch going up half way left the bot hacking at stone with whatever it was holding. It re-checks every half second now.
+- A broken pickaxe down a mine: the mining job carried on ("Mining iron" with bare hands). It stops now, and the bot makes a new pickaxe from what it's carrying.
+- Bots carry a spare-pickaxe kit before heading down a mine: two sticks and a crafting table (the cobble's all round them).
+- A pickaxe with only a few uses left gets a spare made before the next big dig (a stone one for a worn wooden one; an iron one for worn diamond or netherite, not more diamonds). The spare isn't thrown out as "old gear".
+- Bots pick their crafting table back up after using it out in the field (they used to leave a trail of them).
+
+**Animals**
+- No more hunting sheep (or cows, or anything) through twenty blocks of rock: a bot only goes for an animal it can actually see, or when both of them are out under the sky.
+
+**Testing jar**
+- `/jtg debug <bot> path <from> <to>` shows the whole route a bot would plan, every dig and every block put down.
+
+**New player: MadisonBeer**
+- Madison Beer joins the roster (old worlds get her too, ready to `/jtg invite`). She has her own skin, drawn for the mod and shipped inside it (long dark-brown hair, brown eyes with winged liner, a black top with a little gold necklace, high-waisted jeans and boots, on the slim arms), because the real "madisonbeer" Minecraft account belongs to someone else.
+- She plays her own way: creative and particular about how things look (a big builder who's always doing her place up), sociable, loves animals, keeps her things tidy, and would rather stay out of a fight than start one.
+
+**Testing jar**
+- A separate `-debug` jar for testing, with a bot debug log (`logs/joinedthegame-debug.log`, the last run kept as `-previous`): every bot's status every 10 seconds, every decision, and every goal switch with the scores (`Mining iron (38) -> Pickup (48)`). Plus `/jtg debug <bot>`: what it's doing, every goal's score, its big goal and unfinished projects, its path and personality. The normal jar has none of this.
+
+**Combat**
+- Shot at while swimming: it swims off instead of standing in the water with its shield up for ever.
+
+---
+
+## 0.8.0 Netherite
+**Netherite**
+- A new project for bots with a diamond pickaxe and a diamond loadout: upgrade it to netherite at a smithing table, enchantments and all, instead of replacing it.
+- Picky about what gets upgraded: only the real, permanent loadout. Armour it's actually wearing, and its best sword, pickaxe, axe and spear (the one it'd use). Enchanted pieces always first (a Sharpness V sword before anything plain); never a hoe, a shovel or some spare diamond thing it happens to be carrying.
+- Works out each step: whatever's put away at home first; an ingot from 4 netherite scrap (smelted from ancient debris) and 4 gold ingots (gold ore mined and smelted if need be); a smithing table made and put down if there isn't one; copies its last template (7 diamonds and a netherrack) when there's more to upgrade.
+- Netherite nether trips: netherrack for template copies, a bastion for the template if there isn't one, then strip-mining down at y 15 where the ancient debris is, and home with it.
+
+**Bastions**
+- Bots tell the four bastions apart (treasure, bridge, units, hoglin stable) and remember treasure bastions specially: the treasure one always has a netherite upgrade template.
+- A proper bastion raid: the nearest known treasure bastion first, any bastion otherwise (or go and look for one), chest by chest for the template, gold and treasure; out when it gets too hot. Everyday looting still leaves bastions alone.
+
+**Anchoring (config)**
+- In spectator mode you're not an anchor: bots aren't tied to you and go wherever they want (`anchorToSpectators`, off by default).
+- New anchoring options alongside `maxDistanceFromPlayers`: `leashToPlayers` (on/off), `comeBackToPercent` (how close they come back), `leashOnExpeditions` (off by default: a nether trip or a trial chamber run isn't dragged back half way) and `driftTowardPlayers` (exploring wanders back toward you).
+
+**Mining like a player**
+- Bots mine a proper haul once they're down there, not just the three iron the next item needs before climbing all the way back up to smelt it and digging a whole new staircase for the next: iron and coal at least 16, gold and copper 8, lapis and diamonds 12, up to 32. They keep at it while it's turning ore up (three minutes without a find, or twelve all told; diamonds five and fifteen), and keep what they got.
+- Down a mine, a bot puts down its own crafting table or furnace (from the cobble it's carrying) instead of walking back to one it remembers 30 blocks up. A remembered one is only worth the walk if it's close.
+- A pickaxe that wears out half way down: straight to the best one it can make from what it's carrying (stone, or iron if it has the ingots), not back to a wooden one and up for a tree.
+
+**Getting at things**
+- A chest it can't see from anywhere (inside a shipwreck's hull, behind a ruined portal's blackstone): it gets within reach and digs through to it, like a player, instead of going back and forth for ever. Water beside the blocks is fine for this; lava isn't, and never into its own house. Works for every chest, furnace and table, not just looting. Waterlogged stairs, slabs and fences (a beached shipwreck's hull is full of them) count as solid blocks it can break through; plain water doesn't.
+- A chest with something on its lid won't open: it takes the block off first (a bot once put its own crafting table on the shipwreck chest it was about to loot). And crafting tables, furnaces and smithing tables are never put down on top of a chest or anything else with an inside.
+
+**Food**
+- Hungry with nothing to hunt about: it checks its home chests and stash for food before wandering off to look.
+
+**Fixes**
+- The planner couldn't use anything that only comes out of a furnace as an ingredient (netherite scrap); it can now.
+- Obsidian (and now ancient debris) asked for an iron pickaxe; it's a diamond one.
+- Ancient debris, netherrack and quartz are never dug for in the overworld.
+- A failed step in a long project waits a moment before trying again instead of using up every retry in one tick.
+- A bot that lands in the nether takes a look round for structures before wandering off, and stops wandering the moment the bastion it's looking for turns up.
+- Only one nether trip at a time: a netherite trip isn't shadowed by the usual "get home from the nether" one.
+- A project started with `/jtg project` isn't quietly undone by the "full iron gear first" rule any more.
+- A project that's about the nether (netherite) keeps running once the bot's through the portal; before, every project was switched off in the nether, so the usual blaze-rod trip took over.
+
+---
+
+## 0.7.4 Trial Chamber fixes
+Found by running full trial chamber clears in a test world.
+
+**Vaults**
+- Vaults actually open now. Bots crouch when using an item on a block (so a shield in the other hand doesn't get in the way of stripping logs or tilling), but crouching with anything in your hands skips the block's own action, so the key never went in. Keys go in standing up now.
+- Stands close enough for the vault to notice it. A vault only wakes up (and only takes a key) for a player whose block is within 4 blocks of it; being able to reach it isn't enough, so from 4-4.5 blocks away it stood there turning the key for ever. Now it steps within 3.
+- A vault (or chest, or any block it uses) counts as in sight when any face turned its way can be seen, not only the exact middle: a vault tucked in an alcove between candles was "out of sight" from right in front of it.
+- Vaults between trials: after beating a spawner, a vault in that room it has the key for gets opened there and then, before moving on.
+- Locked vaults are remembered (per chamber, kept over restarts): when a key for one turns up later (an ominous key from an ominous trial), it goes back to that vault instead of hoping to stumble on it again. A vault right where it's standing is always opened before setting off for one further away.
+
+**Getting the run going and keeping it going**
+- A chamber run could never start while already standing in a chamber: looting the chamber's chests always came first. Being in one now counts as committed.
+- A worn-out pickaxe or a broken shield halfway through a run no longer cancels it (the "full iron first" rule now leaves a run that's under way alone; the run checks its own kit).
+- One big goal giving up (a house that keeps going wrong, a nether trip) no longer wipes out a different one that's under way, like a chamber run.
+- Trial keys and ominous bottles kept in ordinary home chests (no secret stash) are fetched for a run; the heavy core for a mace too.
+- A walk that doesn't work out inside a chamber (exploring, going back to a vault) no longer ends the whole run.
+- `/jtg project <bot> trial_chamber` ignores the chamber's "come back later".
+
+**Combat**
+- No more running from mobs standing in water. Trial chamber dispensers splash water about, so half the mobs in there are in some; only a ranged mob fully under the water (a drowned with a trident) counts as "shooting from the water" now. (A breeze in a puddle had a fully kitted bot digging in at full health.)
+- Hiding that isn't working (still out in the open after 20 seconds: half a box, a skeleton picking at it from across the room, chamber mobs never wander off) is given up on: fight it out if it's winnable, otherwise run. Before, it could hide in the open for ever.
+- The log says why a retreat started.
+
+**Getting about**
+- No pillaring up off a slab or bed: from half a block down a jump can't clear the block that has to go in underneath, so it jumped on the spot (trial chambers are full of copper slabs).
+- Feet stuck inside a block (with the head in a torch or air, so not "in a wall"): dig out of it.
+
+---
+
 ## 0.7.3 Trial Chambers, Mace & Spear
 **Trial Chambers** (built on the real 26.3 trial spawner and vault code)
 - A proper chamber run as a project: readiness first (armour, a real weapon, food, health, a shield or a bow, blocks; brave and reckless bots go earlier, careful ones prepare more, and each death in there raises the bar), keys and ominous bottles fetched from the stash, then travel there and work through it.

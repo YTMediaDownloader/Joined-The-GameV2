@@ -176,12 +176,33 @@ public class BotListScreen extends Screen {
                 default -> 0xFFDDDDDD;
             };
             graphics.text(this.font, entry.name(), left + 22, y + 3, nameColor);
+            // "Hiding (my stuff's guarded by a skeleton)": what it's doing on the second line, with
+            // its health and food; why it's holding off on something up on the name line, where
+            // there's room, in its own colour. Hover the row for the whole thing.
+            String doing = entry.activity();
+            String note = null;
+            int open = doing.lastIndexOf(" (");
+            if (entry.state() == RosterEntry.ONLINE && open > 0 && doing.endsWith(")")) {
+                note = doing.substring(open + 2, doing.length() - 1);
+                doing = doing.substring(0, open);
+            }
             String status = switch (entry.state()) {
-                case RosterEntry.ONLINE -> entry.activity() + "  ❤" + Math.round(entry.health()) + " ☕" + entry.food();
+                case RosterEntry.ONLINE -> doing + "  ❤" + Math.round(entry.health()) + " ☕" + entry.food();
                 case RosterEntry.BANNED -> Component.translatable("joinedthegame.screen.banned").getString();
                 default -> Component.translatable("joinedthegame.screen.offline").getString();
             };
-            graphics.text(this.font, this.font.plainSubstrByWidth(status, PANEL - 190), left + 22, y + 13, 0xFF999999);
+            int textWidth = PANEL - 190;
+            if (note != null) {
+                int noteX = left + 22 + this.font.width(entry.name()) + 8;
+                int room = left + 22 + textWidth - noteX;
+                String shown = this.font.width(note) <= room ? note : this.font.plainSubstrByWidth(note, room - this.font.width("…")) + "…";
+                graphics.text(this.font, shown, noteX, y + 3, 0xFFE0B050);
+            }
+            graphics.text(this.font, this.font.plainSubstrByWidth(status, textWidth), left + 22, y + 13, 0xFF999999);
+            boolean cut = this.font.width(status) > textWidth || note != null;
+            if (cut && mouseX >= left && mouseX < left + 22 + textWidth && mouseY >= y && mouseY < y + ROW - 2) {
+                graphics.setTooltipForNextFrame(Component.literal(doing + (note != null ? "\n(" + note + ")" : "")), mouseX, mouseY);
+            }
             y += ROW;
         }
         if (entries.size() > visibleRows()) {

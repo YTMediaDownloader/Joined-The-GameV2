@@ -83,8 +83,16 @@ public final class Structures {
         }
     }
 
-    /** A structure the bot knows about. {@code box} covers the whole thing. */
-    public record Known(Kind kind, Identifier id, BoundingBox box) {
+    /**
+     * A structure the bot knows about. {@code box} covers the whole thing. {@code variant} is
+     * which sort it is where that matters (a bastion: "treasure", "bridge", "units" or
+     * "hoglin stable"), otherwise empty.
+     */
+    public record Known(Kind kind, Identifier id, BoundingBox box, String variant) {
+        public String describe() {
+            return this.variant.isEmpty() ? this.kind.label : this.kind.label + " (" + this.variant + ")";
+        }
+
         public BlockPos center() {
             return box.getCenter();
         }
@@ -116,13 +124,34 @@ public final class Structures {
                         if (start == null || !start.isValid() || !seen.add(start)) continue;
                         Identifier id = registry.getKey(structure);
                         if (id == null) continue;
-                        out.add(new Known(Kind.of(id), id, start.getBoundingBox()));
+                        Kind kind = Kind.of(id);
+                        out.add(new Known(kind, id, start.getBoundingBox(), kind == Kind.BASTION ? bastionVariant(start) : ""));
                     }
                 }
             }
         }
         return out;
     }
+
+    /**
+     * Which of the four bastions this is, from the pieces it was built from (26.3 BastionPieces:
+     * bastion/treasure, bastion/bridge, bastion/units, bastion/hoglin_stable). The treasure one
+     * always has a netherite upgrade template in its chest; the others only sometimes.
+     */
+    private static String bastionVariant(StructureStart start) {
+        for (var piece : start.getPieces()) {
+            if (!(piece instanceof net.minecraft.world.level.levelgen.structure.PoolElementStructurePiece p)) continue;
+            String e = p.getElement().toString();
+            if (e.contains("bastion/treasure")) return "treasure";
+            if (e.contains("bastion/hoglin_stable")) return "hoglin stable";
+            if (e.contains("bastion/bridge")) return "bridge";
+            if (e.contains("bastion/units")) return "units";
+        }
+        return "";
+    }
+
+    /** Memory key for treasure bastions (the sure place for a netherite upgrade template). */
+    public static final String TREASURE_BASTION = "structure:bastion_treasure";
 
     /** The structure (of any kind) the bot is standing in, or null. */
     public static @Nullable Known inside(BotPlayer bot) {

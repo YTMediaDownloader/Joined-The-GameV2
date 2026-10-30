@@ -19,6 +19,7 @@ public final class RecoverGoal extends Goal {
     public static final int MAX_DEATHS = 3;
 
     private @Nullable CollectItems collect;
+    private long toldGuarded = -1_000_000L;
     private int navFailures;
 
     public RecoverGoal(BotBrain brain) {
@@ -31,13 +32,60 @@ public final class RecoverGoal extends Goal {
         if (death == null || bot.isDeadOrDying()) return 0;
         if (death.dimension() != bot.level().dimension()) return 0;
         // Not in the dark without armour: that's how it died in the first place. Morning.
-        if (bot.level().isDarkOutside() && !ShelterGoal.nightReady(bot)) return 0;
-        if (this.brain.now() - this.brain.deathTime() > GIVE_UP_TICKS) {
+        long age = this.brain.now() - this.brain.deathTime();
+        if (bot.level().isDarkOutside() && !ShelterGoal.nightReady(bot)) {
+            if (age <= GIVE_UP_TICKS) this.brain.aside("leaving my stuff till morning");
+            return 0;
+        }
+        if (age > GIVE_UP_TICKS) {
             this.brain.remember(net.joinedthegame.ai.BotMemory.EventType.LOST_ITEMS, "", death, 0.6f);
             this.brain.forgetDeath(false);
             return 0;
         }
+        // Something that shoots still hanging about where we died (a skeleton in the shade of a
+        // ravine, say): walking straight back gets us shot again, and again. Give it a chance to
+        // wander off, unless the stuff's about to vanish anyway (the last minute: worth the risk).
+        if (age < GIVE_UP_TICKS - 20 * 60) {
+            String guard = guarded(bot, death);
+            if (guard != null) {
+                this.brain.aside("my stuff's guarded by " + guard);
+                if (this.brain.now() - this.toldGuarded > 20 * 30) {
+                    this.toldGuarded = this.brain.now();
+                    this.brain.log("my stuff's guarded (" + guard + "), waiting for it to go before I go back ("
+                            + (GIVE_UP_TICKS - age) / 20 + "s left)");
+                }
+                return 0;
+            }
+        }
         return 72;
+    }
+
+    /**
+     * Whatever killed us still sitting on the pile: anything that shoots (16 blocks), or other
+     * monsters by the spot when there's more than one of them, or we're not geared to take one on
+     * (a bot in leather that died to a slime walks straight back into the same slime otherwise).
+     */
+    private @Nullable String guarded(BotPlayer bot, GlobalPos death) {
+        if (!bot.level().isLoaded(death.pos())) return null;
+        var mobs = bot.level().getEntitiesOfClass(net.minecraft.world.entity.Mob.class, new net.minecraft.world.phys.AABB(death.pos()).inflate(16),
+                m -> m.isAlive() && m instanceof net.minecraft.world.entity.monster.Enemy);
+        int close = 0;
+        net.minecraft.world.entity.Mob near = null;
+        for (var m : mobs) {
+            if (m.isHolding(net.minecraft.world.item.Items.BOW) || m.isHolding(net.minecraft.world.item.Items.CROSSBOW)) return name(m);
+            if (m.distanceToSqr(net.minecraft.world.phys.Vec3.atCenterOf(death.pos())) < 10 * 10) {
+                close++;
+                near = m;
+            }
+        }
+        double gear = this.brain.needs().level(net.joinedthegame.ai.life.Needs.Need.GEAR);
+        if (close >= 2) return close + " monsters";
+        if (near != null && gear > 0.6) return name(near);
+        return null;
+    }
+
+    private static String name(net.minecraft.world.entity.Mob m) {
+        return "a " + m.getType().getDescription().getString().toLowerCase(java.util.Locale.ROOT);
     }
 
     @Override

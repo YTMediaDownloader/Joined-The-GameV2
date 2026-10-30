@@ -59,14 +59,14 @@ public final class DepositGoal extends Goal {
             if (far == null || far.dimension() != bot.level().dimension()) return 0;
             if (far.pos().distSqr(bot.blockPosition()) > 400 * 400) return 0;
             if (Inv.usedSlots(bot) < Inv.MAIN_SLOTS - 4) return 0;
-            if (extraItems(bot, this.brain.buildingHouse(), this.brain.focus() == net.joinedthegame.ai.BotBrain.Focus.NETHER, false)
+            if (extraItems(bot, this.brain.buildingHouse(), this.brain.onNetherTrip(), false)
                     + extraItems(bot, this.brain.buildingHouse(), false, true) < 48) return 0;
             this.mode = Mode.HOMEWARD;
             return 50;
         }
         // Treasure to hide?
         GlobalPos stash = this.brain.record().stash();
-        boolean nether = this.brain.focus() == net.joinedthegame.ai.BotBrain.Focus.NETHER;
+        boolean nether = this.brain.onNetherTrip();
         // Only if there's treasure over what we keep on us (it used to go and dig up the stash
         // for diamonds it was keeping, or golden apples, and put nothing in).
         if (stash != null && stash.dimension() == bot.level().dimension() && extraItems(bot, this.brain.buildingHouse(), nether, true) > 0
@@ -83,7 +83,7 @@ public final class DepositGoal extends Goal {
         if (this.brain.mining()) threshold = Integer.MAX_VALUE;
         if (extra == 0 || extra < threshold && Inv.usedSlots(bot) < 27) return 0;
         BotManager manager = BotManager.get(bot.level().getServer());
-        List<BlockPos> storage = Homes.storageNear(bot.level(), home.pos());
+        List<BlockPos> storage = Homes.storageOf(bot.level(), this.brain.record());
         storage.removeIf(p -> this.brain.isBlacklisted(p) || manager.isStash(bot.level(), p));
         // A chest with room in it; none (or no chests at all): make another and put it down.
         BlockPos room = null;
@@ -136,6 +136,7 @@ public final class DepositGoal extends Goal {
         this.ticks = 0;
         this.openTicks = 0;
         this.uncovered = false;
+        this.chestSteps = 0;
     }
 
     @Override
@@ -173,7 +174,7 @@ public final class DepositGoal extends Goal {
         }
         if (this.openTicks == 20 && bot.containerMenu instanceof ChestMenu menu) {
             Container container = menu.getContainer();
-            int moved = depositExtras(bot, container, this.mode == Mode.STASH, this.brain.buildingHouse(), this.brain.focus() == net.joinedthegame.ai.BotBrain.Focus.NETHER);
+            int moved = depositExtras(bot, container, this.mode == Mode.STASH, this.brain.buildingHouse(), this.brain.onNetherTrip());
             if (moved > 0) this.brain.log((this.mode == Mode.STASH ? "hid " : "stored ") + moved + " items");
             if (this.mode == Mode.STORE) net.joinedthegame.ai.Storage.refresh(bot, this.brain);
             else if (this.mode == Mode.STORE) this.brain.blacklist(chest); // full, use another
@@ -276,13 +277,21 @@ public final class DepositGoal extends Goal {
         var status = this.task.tick(bot, this.brain);
         if (status == net.joinedthegame.ai.task.Task.Status.RUNNING) return true;
         this.task.stop(bot, this.brain);
+        boolean putDown = this.task instanceof net.joinedthegame.ai.task.BuildTask;
         this.task = null;
         if (status == net.joinedthegame.ai.task.Task.Status.FAILED) {
             if (this.mode == Mode.NEW_CHEST) this.noNewChestUntil = this.brain.now() + 20 * 60 * 5;
             cooldown(this.brain.now(), 20 * 60 * 3);
+            return false;
         }
-        return false; // (a chest just made goes down on the next go)
+        // A new chest is a few steps (the wood, the planks, the chest, putting it down): see it
+        // through, rather than one step at a time with other jobs in between grabbing the wood.
+        if (this.mode == Mode.NEW_CHEST && !putDown && ++this.chestSteps < 8) return true;
+        this.chestSteps = 0;
+        return false;
     }
+
+    private int chestSteps;
 
     /**
      * The next step toward another storage chest: make one, then put it down by the others

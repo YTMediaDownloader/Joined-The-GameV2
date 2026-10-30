@@ -114,9 +114,9 @@ public final class CombatGoal extends Goal {
         if (isRanged(mob) && d >= 1.5 && !hasShield(bot)) d *= 1.5; // fireballs too
         if (mob.isBaby()) d *= 1.3; // fast and hard to hit
         if (id.equals("drowned") && mob.isHolding(Items.TRIDENT)) d = 2.0;
-        // Further off counts for less (it might not even come).
+        // Further off counts for less (it might not even come). Not an archer: it doesn't have to.
         double dist = Math.sqrt(mob.distanceToSqr(bot));
-        return dist <= 6 ? d : d * 0.6;
+        return dist <= 6 || isRanged(mob) ? d : d * 0.6;
     }
 
     private static double danger(BotPlayer bot, List<Mob> mobs) {
@@ -183,7 +183,10 @@ public final class CombatGoal extends Goal {
 
     /** Something shooting at us from the water: can't be fought, only got away from. */
     private static boolean shootingFromWater(Mob mob) {
-        return isRanged(mob) && mob.isInWater();
+        // Fully under the water (a drowned with a trident out in the river). Only touching it
+        // doesn't count: trial chamber dispensers splash water about, so half the mobs in a
+        // chamber are standing in some, and that's no reason to run from them.
+        return isRanged(mob) && mob.isUnderWater();
     }
 
     private List<Mob> hostilesNear(BotPlayer bot, double range) {
@@ -214,7 +217,9 @@ public final class CombatGoal extends Goal {
         double range = 6 + this.brain.personality().brave() * 6;
         for (Mob mob : hostilesNear(bot, 16)) {
             LivingEntity mobTarget = mob.getTarget();
-            boolean aggro = mobTarget == bot || (mobTarget instanceof Player p && !BotManager.isBot(p) && p.distanceToSqr(bot) < 16 * 16);
+            // Going for us, for a real player (unless it can't stand them), or for a friend.
+            boolean aggro = mobTarget == bot || mobTarget instanceof Player p && p != bot && p.distanceToSqr(bot) < 16 * 16
+                    && (BotManager.isBot(p) ? this.brain.friendly(p.getUUID()) : !this.brain.dislikes(p.getUUID()));
             if (!aggro && mob.distanceToSqr(bot) > range * range) continue;
             // The old hand doesn't pick fights it doesn't need: only what's after it, or in its face.
             if (!aggro && this.brain.personality().nomad() > 0.5 && mob.distanceToSqr(bot) > 3 * 3) continue;
@@ -696,14 +701,21 @@ public final class CombatGoal extends Goal {
 
     // --- retreating -------------------------------------------------------------------------
 
+    /** Why we just decided to get out (for the log). */
+    private String retreatWhy = "";
+
     private boolean shouldRetreat(BotPlayer bot, List<Mob> nearby) {
         if (nearby.isEmpty()) return false;
+        this.retreatWhy = "low health";
         if (bot.getHealth() <= fleeHealth()) return true;
         // Sized it up and it's not going our way: go now, while there's health left to run on.
+        this.retreatWhy = "outmatched";
         if (outmatched(bot, nearby)) return true;
         // A drowned throwing tridents from the river: get out of its sight, don't wade in.
+        this.retreatWhy = "shot at from the water";
         if (nearby.stream().anyMatch(CombatGoal::shootingFromWater)) return true;
         // A crowd and already hurt.
+        this.retreatWhy = "a crowd, and hurt";
         return nearby.size() >= 3 && bot.getHealth() <= 10;
     }
 
@@ -744,10 +756,17 @@ public final class CombatGoal extends Goal {
         if (!this.retreating) {
             this.retreating = true;
             this.retreatTicks = 0;
+            this.exposedTicks = 0;
             this.noBuilding = false;
             this.safeTicks = 0;
             this.pillarBase = null;
             this.hide = null;
+            this.hiddenTicks = 0;
+            this.tunnelTo = null;
+            this.tunnelling = false;
+            // Remember who did this (the nearest archer, or whoever hit us).
+            this.cause = nearby.stream().filter(CombatGoal::isRanged).min(java.util.Comparator.comparingDouble(m -> m.distanceToSqr(bot)))
+                    .orElse(this.brain.recentAttacker() instanceof Mob m && isRanged(m) ? m : null);
             // Pick the way out that'll actually work:
             // - archers about: running in the open gets you shot in the back, so dig in
             //   (unless something's already on top of us, then get up a pillar first);
@@ -780,7 +799,7 @@ public final class CombatGoal extends Goal {
             } else {
                 how = "running";
             }
-            this.brain.log(String.format("not a fight I'd win (%.1f hp, odds %.2f), %s", bot.getHealth(),
+            this.brain.log(String.format("not a fight I'd win (%s: %.1f hp, odds %.2f), %s", this.retreatWhy, bot.getHealth(),
                     power(bot) / Math.max(0.01, danger(bot, nearby)), how));
         }
         if (this.hide != null) return hideOut(bot, nearby);
@@ -812,7 +831,9 @@ public final class CombatGoal extends Goal {
         // Shooters about and a shield: back away facing them, shield up. Turning your back on
         // blazes or skeletons to run is how you get a fireball in the back.
         Mob shooter = nearby.stream().filter(CombatGoal::isRanged).min(java.util.Comparator.comparingDouble(m -> m.distanceToSqr(bot))).orElse(null);
-        if (shooter != null && hasShield(bot) && this.hide == null && this.pillarBase == null) {
+        // (On land: in the water there's no stepping back onto anything, so it'd stand there with
+        // its shield up for ever. Swim off instead, below.)
+        if (shooter != null && hasShield(bot) && this.hide == null && this.pillarBase == null && !bot.isInWater()) {
             nav.stop(bot);
             this.brain.controls().lookAt(bot, shooter.getBoundingBox().getCenter());
             this.brain.holdShield(5);
@@ -875,7 +896,59 @@ public final class CombatGoal extends Goal {
     }
 
     /** In the hole: eat to heal, and come out once things have calmed down. */
+    private int exposedTicks;
+
+    /** The archer that sent us into hiding (it counts while it's about, seen or not). */
+    private @Nullable Mob cause;
+    /** How long we've been holed up. */
+    private int hiddenTicks;
+    /** Getting out underground, away from an archer camping the hole. */
+    private @Nullable BlockPos tunnelTo;
+    private boolean tunnelling;
+
+    /**
+     * Archers still a danger to us down here: the one that sent us in (while it's about), any
+     * that are after us, any with a clear shot at the way out (a skeleton 12 blocks off with a
+     * view of the hole is worse than one 8 off behind a wall), and any right on top of us.
+     */
+    private List<Mob> waitingArchers(BotPlayer bot) {
+        Vec3 exit = new Vec3(bot.getX(), bot.getY() + 4.0, bot.getZ()); // the top of the hole
+        return hostilesNear(bot, 24).stream().filter(m -> isRanged(m) && (m == this.cause && m.distanceToSqr(bot) < 24 * 24
+                || m.getTarget() == bot
+                || m.distanceToSqr(bot) < 16 * 16 && clearShot(m, exit)
+                || m.distanceToSqr(bot) < 6 * 6))
+                .sorted(java.util.Comparator.comparingDouble(m -> m.distanceToSqr(bot))).toList();
+    }
+
+    private static boolean clearShot(Mob from, Vec3 to) {
+        var hit = from.level().clip(new net.minecraft.world.level.ClipContext(from.getEyePosition(), to,
+                net.minecraft.world.level.ClipContext.Block.COLLIDER, net.minecraft.world.level.ClipContext.Fluid.NONE, from));
+        return hit.getType() == net.minecraft.world.phys.HitResult.Type.MISS;
+    }
+
+    /** Dig off sideways underground and come up well away from the archer at the hole. */
+    private boolean tunnelOut(BotPlayer bot) {
+        BlockPos to = this.tunnelTo;
+        Navigator nav = this.brain.navigator();
+        if (to == null) return false;
+        if (!this.tunnelling) {
+            this.tunnelling = true;
+            // Strictly underground: no higher than the floor of the hole (the cheap way out is up and
+            // over the top, right past the skeleton).
+            nav.moveUnderground(bot, Vec3.atBottomCenterOf(to), p -> p.closerThan(to, 2.5), Navigator.feet(bot).getY());
+        }
+        if (nav.isMoving() && this.retreatTicks++ < 20 * 60 * 5) return true;
+        this.brain.log(nav.status() == Navigator.Status.ARRIVED ? "tunnelled out" : "couldn't tunnel out: carrying on");
+        this.retreating = false;
+        this.hide = null;
+        this.tunnelTo = null;
+        this.tunnelling = false;
+        cooldown(this.brain.now(), 20 * 5);
+        return false;
+    }
+
     private boolean hideOut(BotPlayer bot, List<Mob> nearby) {
+        if (this.tunnelTo != null) return tunnelOut(bot);
         this.retreatTicks++;
         if (this.hide != this.lastHide) {
             this.lastHide = this.hide;
@@ -894,6 +967,20 @@ public final class CombatGoal extends Goal {
             return true;
         }
         boolean hidden = net.joinedthegame.ai.task.HideTask.isHidden(bot) || this.hide.onPillar(bot);
+        if (hidden) this.exposedTicks = 0;
+        else if (++this.exposedTicks > 20 * 12 || this.exposedTicks > 20 * 2 && bot.getHealth() < this.buildStartHealth - 4) {
+            // A while at it and still out in the open (half a box, a skeleton picking at us from
+            // across the room, and chamber mobs never wander off), or taking a beating while we
+            // try: hiding isn't working.
+            // Fight it if it's a fight we'd win, otherwise just run.
+            this.brain.log("can't get hidden here: " + (shouldRetreat(bot, nearby) ? "running instead" : "fighting it out"));
+            this.hide.stop(bot, this.brain);
+            this.hide = null;
+            this.noBuilding = true;
+            this.exposedTicks = 0;
+            if (!shouldRetreat(bot, nearby)) this.retreating = false;
+            return true;
+        }
         // Something's got in with us (or is right at the edge): shield up while the swing
         // recharges, drop it and hit when it's ready. Don't just turtle.
         if (!this.hide.building()) {
@@ -932,9 +1019,44 @@ public final class CombatGoal extends Goal {
         }
         boolean threatClose = !nearby.isEmpty() && !hidden
                 || nearby.stream().anyMatch(m -> m.distanceToSqr(bot) < 3 * 3);
-        if (threatClose || bot.getHealth() < bot.getMaxHealth() * 0.7f) {
+        // A skeleton still waiting out there: it can't see into the hole, so it isn't in
+        // "nearby", but popping out now just gets us shot and sends us back down, over and over,
+        // until it walks in on us. So, once healed up:
+        // - a fight we'd win: go and finish it;
+        // - one we wouldn't: wait a while, then tunnel off underground and come up elsewhere;
+        // - and never sit down here for ever (no nine-minute vacations).
+        boolean healed = bot.getHealth() >= bot.getMaxHealth() * 0.7f;
+        List<Mob> archers = hidden ? waitingArchers(bot) : List.of();
+        if (hidden) this.hiddenTicks++;
+        if (!archers.isEmpty() && !this.hide.onPillar(bot) && !this.hide.building()) {
+            Mob archer = archers.getFirst();
+            // (The same call as out there: everything about, archers at full danger.)
+            List<Mob> all = new java.util.ArrayList<>(nearby);
+            for (Mob a : archers) if (!all.contains(a)) all.add(a);
+            if (healed && !shouldRetreat(bot, all)) {
+                this.brain.log("healed up: going after the " + archer.getType().getDescription().getString().toLowerCase(java.util.Locale.ROOT));
+                this.retreating = false;
+                this.hide.stop(bot, this.brain);
+                this.hide = null;
+                this.target = archer;
+                return true;
+            }
+            if (healed && this.hiddenTicks > 20 * 45 && this.tunnelTo == null) {
+                Vec3 away = bot.position().subtract(archer.position()).multiply(1, 0, 1);
+                if (away.lengthSqr() < 0.01) away = new Vec3(1, 0, 0);
+                away = away.normalize().scale(14);
+                this.tunnelTo = Navigator.feet(bot).offset((int) Math.round(away.x), 0, (int) Math.round(away.z));
+                this.brain.log("the " + archer.getType().getDescription().getString().toLowerCase(java.util.Locale.ROOT)
+                        + " is still waiting up there: tunnelling out the other way, to " + this.tunnelTo.toShortString());
+                this.hide.stop(bot, this.brain);
+                return tunnelOut(bot);
+            }
+            // (Waited long enough, couldn't tunnel: chance it.)
+            if (this.hiddenTicks < 20 * 90) threatClose = true;
+        }
+        if (threatClose || !healed) {
             this.safeTicks = 0;
-        } else if (++this.safeTicks > 100) {
+        } else if (++this.safeTicks > (hidden ? 200 : 100)) {
             this.retreating = false;
             this.hide.stop(bot, this.brain);
             this.hide = null;
