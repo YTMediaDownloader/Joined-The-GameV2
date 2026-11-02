@@ -1198,6 +1198,19 @@ public final class CombatGoal extends Goal {
         boolean cornered = nav.status() == Navigator.Status.FAILED || (this.retreatTicks > 30 && threatClose
                 && nearestDist(bot, nearby) < 3);
         boolean shooters = nearby.stream().anyMatch(CombatGoal::isRanged);
+        // Cornered by an archer: out of its sight round a corner if there is one (a box goes up
+        // a block at a time, under fire; LeBron and PixelPickle were shot building theirs).
+        if (cornered && shooters && bot.onGround() && bot.level().dimension() != net.minecraft.world.level.Level.NETHER) {
+            Mob archer = nearby.stream().filter(CombatGoal::isRanged).min(java.util.Comparator.comparingDouble(m -> m.distanceToSqr(bot))).orElse(null);
+            BlockPos corner = archer == null ? null : coverFrom(bot, archer);
+            if (corner != null) {
+                nav.stop(bot);
+                this.retreatCover = corner;
+                this.retreatTicks = 0;
+                this.brain.log("cornered: out of its sight round the corner at " + corner.toShortString());
+                return true;
+            }
+        }
         if (cornered && bot.onGround() && !onPillar(bot) && !this.noBuilding
                 && bot.level().dimension() != net.minecraft.world.level.Level.NETHER) {
             if (Inv.scaffoldCount(bot) >= 9) {
@@ -1355,10 +1368,29 @@ public final class CombatGoal extends Goal {
             this.buildStartHealth = bot.getHealth();
         }
         if (this.hide.building() && bot.hurtTime > 0 && bot.getHealth() < this.buildStartHealth - 2) {
-            this.brain.log("getting hit while " + (this.hide.pillaring() ? "pillaring" : "boxing in") + ": forget it, run");
+            String what = this.hide.pillaring() ? "pillaring" : "boxing in";
             this.hide.stop(bot, this.brain);
             this.hide = null;
             this.noBuilding = true;
+            // Turning our back now is the worst of it (Millie and Sparklez ran with the zombies on
+            // them; LeBron and PixelPickle ran from skeletons in the open). Something on us that
+            // hits up close: hit it back for a while. An archer: round a corner if there is one.
+            Mob onUs = nearby.stream().filter(m -> !isRanged(m) && m.distanceToSqr(bot) < 3 * 3)
+                    .min(java.util.Comparator.comparingDouble(m -> m.distanceToSqr(bot))).orElse(null);
+            Mob archer = nearby.stream().filter(CombatGoal::isRanged).min(java.util.Comparator.comparingDouble(m -> m.distanceToSqr(bot))).orElse(null);
+            BlockPos corner = onUs == null && archer != null ? coverFrom(bot, archer) : null;
+            if (onUs != null) {
+                this.retreating = false;
+                this.fightItOutUntil = this.brain.now() + 20 * 15;
+                this.target = onUs;
+                this.brain.log("getting hit while " + what + ": no time, fighting it out");
+            } else if (corner != null) {
+                this.retreatCover = corner;
+                this.retreatTicks = 0;
+                this.brain.log("getting hit while " + what + ": out of its sight round the corner at " + corner.toShortString());
+            } else {
+                this.brain.log("getting hit while " + what + ": forget it, run");
+            }
             return true;
         }
         net.joinedthegame.ai.task.Task.Status status = this.hide.tick(bot, this.brain);
