@@ -29,8 +29,17 @@ public class BotPacketListener extends ServerGamePacketListenerImpl {
 
     @Override
     public void send(Packet<?> packet, @Nullable ChannelFutureListener listener) {
-        // Dropped: bots have no client.
+        // Dropped: bots have no client. Except one: being pushed. A player's hit sends the knockback
+        // to the victim's client to apply, then puts the server's copy of its motion back as it was;
+        // with no client, a bot punched by a player never moved. So keep it, and the bot applies it
+        // on its next tick, the way a client would.
+        if (packet instanceof net.minecraft.network.protocol.game.ClientboundSetEntityMotionPacket m && m.id() == this.player.getId()) {
+            this.pendingMotion = m.movement();
+        }
     }
+
+    /** Knockback sent to "our client", to apply next tick (see send). */
+    public net.minecraft.world.phys.@Nullable Vec3 pendingMotion;
 
     @Override
     public void teleport(PositionMoveRotation destination, Set<Relative> relatives) {

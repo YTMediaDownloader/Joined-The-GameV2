@@ -43,6 +43,11 @@ public class BotPlayer extends ServerPlayer {
             return;
         }
 
+        // Knocked back by a player last tick: take the push (the client would have).
+        if (this.connection instanceof BotPacketListener l && l.pendingMotion != null) {
+            this.setDeltaMovement(l.pendingMotion);
+            l.pendingMotion = null;
+        }
         super.tick();
 
         BotBrain brain = this.brain();
