@@ -81,6 +81,7 @@ public final class MineTask implements Task {
         // (The plan gets a new pickaxe made first, from the cobble and the spare sticks.)
         if (Inv.pickaxeTier(bot) < this.source.pickTier()) {
             brain.log("no pickaxe good enough for " + this.source.label() + " any more: stopping");
+            this.toolBroke = true;
             return have > this.startHave ? Status.DONE : Status.FAILED;
         }
         // Going for a proper haul takes a while: keep at it as long as it's turning stuff up.
@@ -114,6 +115,18 @@ public final class MineTask implements Task {
             }
         }
 
+        // Wood, and we're down a mine: back up the way we came first (to where we last saw the
+        // sky), not a tunnel dug straight up through the rock toward the nearest tree. That dig
+        // was most of the night's "Chopping wood" troubles.
+        if (this.source == Sources.LOGS && this.block == null && !this.wentUp && net.joinedthegame.ai.goal.SleepGoal.deepUnderground(bot)) {
+            this.wentUp = true;
+            BlockPos sky = brain.lastSky();
+            if (sky != null && sky.distSqr(bot.blockPosition()) < 160 * 160) {
+                brain.log("need wood: back up the way I came first");
+                this.sub = new net.joinedthegame.ai.task.TravelTask(sky, 3, "Heading back up for wood");
+                return Status.RUNNING;
+            }
+        }
         if (this.block != null) return mineTarget(bot, brain);
 
         if (this.searchCooldown-- <= 0) {
@@ -155,7 +168,11 @@ public final class MineTask implements Task {
         java.util.function.Predicate<BlockPos> skip = p -> brain.isBlacklisted(p) || this.avoid.test(p)
                 || this.source == Sources.LOGS && !net.joinedthegame.ai.Trees.choppable(bot, p)
                 || nearAny(avoidPeople, p, 8)
-                || this.source != Sources.LOGS && someoneBeside(bot, p);
+                || this.source != Sources.LOGS && someoneBeside(bot, p)
+                // Not under water (sand off a river bed, stone at the bottom of a lake): five times
+                // slower to dig in water, twenty-five floating, and the drops float off. Cozmo got
+                // stuck again and again mining sand and stone under a river.
+                || !bot.isInWater() && bot.level().getFluidState(p.above()).is(net.minecraft.tags.FluidTags.WATER);
         // Diamonds in sight and a pickaxe that can take them: nobody walks past diamonds.
         BlockPos found = null;
         if (this.source.isUnderground() && this.source != Sources.DIAMOND && Inv.pickaxeTier(bot) >= 4) {
@@ -228,6 +245,13 @@ public final class MineTask implements Task {
     }
 
     private boolean toldCrowd;
+    private boolean toolBroke;
+    private boolean wentUp;
+
+    /** Stopped because the pickaxe gave out (not because the job's done). */
+    public boolean toolBroke() {
+        return this.toolBroke;
+    }
 
     /**
      * Two or more others within five blocks (about our level): which way is away from them
@@ -471,6 +495,15 @@ public final class MineTask implements Task {
                     this.aim = null;
                     return Status.RUNNING;
                 }
+                // The ore itself skips the breakable() check above, and that's how Duckatyt died:
+                // he mined the iron he was standing on, and the lava under it had him a second later.
+                if (lavaRisk(world, bot, aim)) {
+                    brain.log("lava by the block at " + aim.toShortString() + ": leaving it");
+                    brain.blacklist(pos);
+                    this.block = null;
+                    this.aim = null;
+                    return Status.RUNNING;
+                }
                 this.aim = aim;
             }
             brain.breaker().start(aim);
@@ -509,6 +542,24 @@ public final class MineTask implements Task {
         if (items.isEmpty()) return null;
         for (var e : items) this.triedItems.add(e.getUUID());
         return new CollectItems(items.getFirst().blockPosition(), 6, 120);
+    }
+
+    /**
+     * Would breaking this let lava at us? Lava touching it flows into the hole; and if it's our
+     * own floor, we drop into whatever's below, so lava anywhere down that drop (or at the
+     * bottom, or beside where we'd land) is a death a player would see coming.
+     */
+    private static boolean lavaRisk(WorldView world, BotPlayer bot, BlockPos block) {
+        for (Direction dir : Direction.values()) if (world.isLava(block.relative(dir))) return true;
+        if (!isUnderUs(bot, block)) return false;
+        BlockPos.MutableBlockPos p = block.mutable();
+        for (int down = 0; down < 6; down++) {
+            p.move(Direction.DOWN);
+            if (world.isLava(p)) return true;
+            for (Direction side : Direction.Plane.HORIZONTAL) if (world.isLava(p.relative(side))) return true;
+            if (!world.passable(p)) return WorldView.isDangerous(world.state(p)); // the floor we'd land on
+        }
+        return false;
     }
 
     /** One of the blocks holding us up (straight under our feet, or under the edge we're on). */

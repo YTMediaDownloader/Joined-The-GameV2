@@ -98,6 +98,14 @@ public final class BotBrain {
     private @Nullable UUID greetTarget;
     private @Nullable LivingEntity lastAttacker;
     private long lastAttackedAt;
+
+    /** When we last drank (or threw) a potion: see {@link Potions}. */
+    public long lastPotionAt = Long.MIN_VALUE / 2;
+
+    /** When a monster last hurt us (game time). */
+    public long lastAttackedAt() {
+        return this.lastAttackedAt;
+    }
     // Death recovery
     /** Long-term memory, saved on the bot (see {@link BotMemory}). Refreshed every tick. */
     private BotMemory memory = new BotMemory();
@@ -223,10 +231,12 @@ public final class BotBrain {
         this.lastBot = bot;
         this.dimension = bot.level().dimension();
         this.memory = bot.getData(net.joinedthegame.JtgAttachments.MEMORY);
+        if (this.now % 20 == 0 && net.joinedthegame.DebugLog.on()) this.secondsOn.merge(this.current == null ? (bot.isSleeping() ? "Sleeping" : "Idle") : name(this.current), 1, Integer::sum);
         if (this.now % 1200 == 0) this.memory.tidy(this.now);
         if (this.now % 1200 == 7) fadeFeelings();
         noteJump(bot);
         if (net.joinedthegame.ai.goal.ShelterGoal.onDryLand(bot)) this.lastDryLand = net.joinedthegame.ai.nav.Navigator.feet(bot);
+        if (this.now % 20 == 9 && bot.onGround() && bot.level().canSeeSky(bot.blockPosition())) this.lastSky = bot.blockPosition();
         this.controls.reset();
 
         if (bot.isSleeping()) {
@@ -254,6 +264,7 @@ public final class BotBrain {
         this.navigator.underCover = this.current instanceof ProgressionGoal && bot.level().isDarkOutside()
                 && !net.joinedthegame.ai.goal.ShelterGoal.nightReady(bot) && !bot.level().canSeeSky(bot.blockPosition().above());
         runCurrent(bot);
+        Potions.reflex(bot, this);
         watchdog(bot);
         this.navigator.tick(bot, this.controls);
         habits(bot);
@@ -276,7 +287,42 @@ public final class BotBrain {
 
     /** Debug-only log line tagged with the bot's name (see {@link net.joinedthegame.DebugLog}). */
     public void log(String message) {
-        if (net.joinedthegame.DebugLog.on()) net.joinedthegame.DebugLog.write("[bot] " + this.record.name() + ": " + message);
+        if (!net.joinedthegame.DebugLog.on()) return;
+        net.joinedthegame.DebugLog.write("[bot] " + this.record.name() + ": " + message);
+        // Running counts for the snapshot (logs/joinedthegame-bots.json): the trouble at a glance,
+        // without reading hours of log.
+        if (message.startsWith("stuck at")) count("stuck");
+        else if (message.startsWith("flip-flopping")) count("flipFlops");
+        else if (message.startsWith("watchdog:")) count("watchdogs");
+        else if (message.endsWith(" FAILED")) count("failedTasks");
+        else if (message.startsWith("memory: RECOVERED_ITEMS")) count("itemsRecovered");
+        else if (message.startsWith("memory: LOST_ITEMS")) count("itemsLost");
+        else if (message.startsWith("memory: DIED ")) {
+            count("deaths");
+            count("died to " + message.substring("memory: DIED ".length()).replace("minecraft:", ""));
+        }
+    }
+
+    // --- debug stats (testing jar: see Snapshot) ---------------------------------------------
+    private final java.util.Map<String, Integer> stats = new java.util.TreeMap<>();
+    private final java.util.Map<String, Integer> secondsOn = new java.util.HashMap<>();
+    private final java.util.ArrayDeque<String> recentDeaths = new java.util.ArrayDeque<>();
+
+    private void count(String what) {
+        this.stats.merge(what, 1, Integer::sum);
+    }
+
+    public java.util.Map<String, Integer> stats() {
+        return this.stats;
+    }
+
+    /** Seconds spent on each goal since the game started. */
+    public java.util.Map<String, Integer> secondsOn() {
+        return this.secondsOn;
+    }
+
+    public java.util.Collection<String> recentDeaths() {
+        return this.recentDeaths;
     }
 
     private void debugLog(BotPlayer bot) {
@@ -328,8 +374,14 @@ public final class BotBrain {
         int bestPriority = 0;
         int currentNow = 0;
         boolean overworld = bot.level().dimension() == net.minecraft.world.level.Level.OVERWORLD;
+        // Night, not geared for it, and tucked into a hole near the surface: nothing that walks us
+        // back out (loot, a hunt, a wander, company). Mining on down from the hole is fine. Bots
+        // kept climbing out after a chest or a cow and diving back in, a hundred times a night.
+        boolean tucked = bot.level().isDarkOutside() && !net.joinedthegame.ai.goal.ShelterGoal.nightReady(bot)
+                && !bot.level().canSeeSky(bot.blockPosition()) && !net.joinedthegame.ai.goal.SleepGoal.deepUnderground(bot);
         for (Goal goal : this.goals) {
             if (goal.onCooldown(this.now)) continue;
+            if (tucked && outdoors(goal)) continue;
             // Away from the overworld: no beds (they explode), no digging for iron down into
             // the lava sea, no wandering about looking for cows.
             if (!overworld && overworldOnly(goal)) continue;
@@ -388,6 +440,14 @@ public final class BotBrain {
             while (this.starts.size() > 12) this.starts.removeFirst();
             best.start(bot);
         }
+    }
+
+    /** Goals that take a bot out and about (not ones that keep it where it is, or underground). */
+    private static boolean outdoors(Goal goal) {
+        return goal instanceof net.joinedthegame.ai.goal.LootGoal || goal instanceof net.joinedthegame.ai.goal.HuntGoal
+                || goal instanceof net.joinedthegame.ai.goal.ExploreGoal || goal instanceof net.joinedthegame.ai.goal.SpawnerGoal
+                || goal instanceof net.joinedthegame.ai.goal.SocialGoal || goal instanceof net.joinedthegame.ai.goal.LeisureGoal
+                || goal instanceof net.joinedthegame.ai.goal.GreetGoal || goal instanceof net.joinedthegame.ai.goal.TagAlongGoal;
     }
 
     private static String name(Goal goal) {
@@ -712,6 +772,17 @@ public final class BotBrain {
         if (canFish) tempt(net.joinedthegame.ai.life.Activities.Activity.LEISURE, "a lake", water);
     }
 
+    private long toldBundleAt = Long.MIN_VALUE / 2;
+
+    /**
+     * Fighting, or hit in the last ten seconds: no sorting the bag now. (It's instant, but nobody
+     * tucks their feathers into a bundle at three hearts with bogged shooting at them.)
+     */
+    public boolean inAFight() {
+        return this.current instanceof net.joinedthegame.ai.goal.CombatGoal || this.current instanceof net.joinedthegame.ai.goal.FeudGoal
+                || this.now - this.lastAttackedAt < 20 * 10 || this.now - this.personAttackedAt < 20 * 10;
+    }
+
     private void habits(BotPlayer bot) {
         shieldReflex(bot);
         fireReflex(bot);
@@ -719,9 +790,19 @@ public final class BotBrain {
         if (this.now % 100 == 23) noticeStructures(bot);
         // Home: keep what's in the chests in mind (someone may have put something in them).
         if (this.now % 600 == 37) Storage.refreshIfHome(bot, this);
-        if (this.now % 100 == 61) {
-            if (Inv.usedSlots(bot) >= Inv.MAIN_SLOTS - 4) Bundles.pack(bot);
-            else if (Inv.usedSlots(bot) <= Inv.MAIN_SLOTS - 10) Bundles.unpack(bot);
+        if (this.now % 100 == 61 && !inAFight()) {
+            // Bags filling up: odds and ends into bundles (making one if need be) before anything
+            // gets thrown out; plenty of room again, out they come.
+            if (Inv.usedSlots(bot) >= Bundles.FULLISH) {
+                int packed = Bundles.pack(bot);
+                if (Bundles.makeOneIfWorthIt(bot, this)) packed += Bundles.pack(bot);
+                if (packed > 0 && this.now - this.toldBundleAt > 20 * 60 * 5) {
+                    this.toldBundleAt = this.now;
+                    log("tucked " + packed + " odds and ends into my bundle" + (Inv.count(bot, st -> st.is(net.minecraft.tags.ItemTags.BUNDLES)) > 1 ? "s" : ""));
+                }
+            } else if (Inv.usedSlots(bot) <= Inv.MAIN_SLOTS - 12) {
+                Bundles.unpack(bot);
+            }
         }
         if (this.now % 60 == 41) noticeOres(bot);
         // Deep dark: creep about. Sculk sensors hear footsteps; crouching is silent.
@@ -739,7 +820,7 @@ public final class BotBrain {
             if (!totemUp(bot)) Inv.equipShield(bot);
         }
         if (this.now % 100 == 13) Crafting.craftTorchesIfUseful(bot);
-        if (this.now % 100 == 31) Junk.tossIfFull(bot, this);
+        if (this.now % 100 == 31 && !inAFight()) Junk.tossIfFull(bot, this);
         if (this.now % 400 == 151) Junk.dropObsolete(bot, this);
         // Hotbar laid out properly, when we're not busy using anything.
         if (this.now % 200 == 77 && !this.breaker.busy() && !bot.isUsingItem() && !(this.current instanceof net.joinedthegame.ai.goal.CombatGoal)) {
@@ -936,6 +1017,12 @@ public final class BotBrain {
     }
 
     /** On a Trial Chamber run and in the chamber now (underground, committed: bedtime can wait). */
+    /** On a raid (an outpost, a village): its chests are what we came for. */
+    public boolean raidingNow() {
+        var k = this.projects.current();
+        return this.focusValue() == Focus.PROJECT && (k == net.joinedthegame.ai.goal.ProjectGoal.Kind.RAID || k == net.joinedthegame.ai.goal.ProjectGoal.Kind.VILLAGE_RAID);
+    }
+
     public boolean inTrialChamber(BotPlayer bot) {
         return this.projects.current() == net.joinedthegame.ai.goal.ProjectGoal.Kind.TRIAL_CHAMBER
                 && this.focusValue() == Focus.PROJECT && net.joinedthegame.ai.project.TrialChamberProject.inChamber(bot);
@@ -1181,7 +1268,8 @@ public final class BotBrain {
         double project = this.projects.bestAppeal(bot);
         if (project > 0) appeal.put(net.joinedthegame.ai.life.Activities.Activity.PROJECT, project);
         boolean canGetThere = pick >= 5 || this.memory.places().containsKey("portal");
-        if (canGetThere && gear <= 0.3 && Inv.count(bot, Items.BLAZE_ROD) < net.joinedthegame.ai.project.NetherTrip.RODS_WANTED) {
+        if (canGetThere && gear <= 0.3 && (Inv.count(bot, Items.BLAZE_ROD) < net.joinedthegame.ai.project.NetherTrip.RODS_WANTED
+                || net.joinedthegame.ai.project.BrewProject.wantsWart(bot, this))) {
             appeal.put(net.joinedthegame.ai.life.Activities.Activity.NETHER,
                     net.joinedthegame.ai.life.Activities.appeal(net.joinedthegame.ai.life.Activities.Activity.NETHER, n, p));
         }
@@ -1493,6 +1581,9 @@ public final class BotBrain {
                 this.personAttackedAt = bot.level().getGameTime();
                 // Following them? Not after that.
                 if (who.getUUID().equals(this.followTarget)) this.followTarget = null;
+                var hits = this.hitTimes.computeIfAbsent(who.getUUID(), k -> new java.util.ArrayDeque<>());
+                hits.addLast(bot.level().getGameTime());
+                while (hits.size() > 8) hits.removeFirst();
                 // Unfinished business: a hit after a break (they ran off and came back) is a new round.
                 long[] u = this.unsettled.computeIfAbsent(who.getUUID(), k -> new long[]{0, Long.MIN_VALUE / 2});
                 long t = bot.level().getGameTime();
@@ -1554,8 +1645,67 @@ public final class BotBrain {
     /** The last place it stood on dry ground (a way back to land from the water). */
     private @Nullable BlockPos lastDryLand;
 
+    /** The last place we stood out under the sky (the way back up out of a mine). */
+    private @Nullable BlockPos lastSky;
+
+    public @Nullable BlockPos lastSky() {
+        return this.lastSky;
+    }
+
     public @Nullable BlockPos lastDryLand() {
         return this.lastDryLand;
+    }
+
+    /**
+     * About to put something down (a crafting table, a furnace) but we're in the water: get out
+     * onto dry ground first. True while still on the way (keep returning RUNNING); false once we're
+     * out, or if there's no known dry ground near enough to try. Redlantern spent four minutes
+     * bobbing in an underground pool trying to set up a furnace in it.
+     */
+    public boolean gettingOutOfWater(BotPlayer bot) {
+        if (!bot.isInWater()) return false;
+        BlockPos land = this.lastDryLand;
+        if (land == null || land.distSqr(bot.blockPosition()) > 48 * 48) return false;
+        if (!this.navigator.isMoving()) {
+            this.navigator.moveNear(bot, net.minecraft.world.phys.Vec3.atBottomCenterOf(land), 1.2);
+            if (this.navigator.status() == net.joinedthegame.ai.nav.Navigator.Status.FAILED) return false;
+            if (this.now - this.toldWaterAt > 20 * 30) {
+                this.toldWaterAt = this.now;
+                log("can't set up in the water: getting out onto dry ground first");
+            }
+        }
+        return true;
+    }
+
+    private long toldWaterAt = Long.MIN_VALUE / 2;
+
+    // --- wool hunts ---------------------------------------------------------------------
+    // No sheep about (a dark forest, a desert): a hunt wanders for two minutes and comes back
+    // with nothing. Bots went straight out again a few minutes later, seventeen times in an hour
+    // and a half. Now each failure in a row means a longer wait before the next: five minutes,
+    // then fifteen, then half an hour. Sheep in sight, or wool got some other way, starts over.
+
+    private int woolFails;
+    private long woolFailAt = Long.MIN_VALUE / 2;
+
+    public void woolHunt(BotPlayer bot, boolean gotIt) {
+        if (gotIt) {
+            this.woolFails = 0;
+            return;
+        }
+        this.woolFails++;
+        this.woolFailAt = this.now;
+        int wait = this.woolFails == 1 ? 5 : this.woolFails == 2 ? 15 : 30;
+        log("no sheep to be found: not looking again for " + wait + " minutes");
+    }
+
+    /** Time for another go at finding sheep (or there are some right here). */
+    public boolean woolHuntDue(BotPlayer bot) {
+        if (this.woolFails == 0) return true;
+        if (!bot.level().getEntitiesOfClass(net.minecraft.world.entity.animal.sheep.Sheep.class, bot.getBoundingBox().inflate(24),
+                s -> s.isAlive() && !s.isBaby()).isEmpty()) return true;
+        long wait = 20L * 60 * (this.woolFails == 1 ? 5 : this.woolFails == 2 ? 15 : 30);
+        return this.now - this.woolFailAt > wait;
     }
 
     // --- searching --------------------------------------------------------------------
@@ -1935,6 +2085,18 @@ public final class BotBrain {
         return u != null && this.now - u[1] < 20 * 60 * 5 ? (int) u[0] : 0;
     }
 
+    /** Real hits from each person lately (for "a hit or two from a friend" versus a beating). */
+    private final java.util.Map<UUID, java.util.ArrayDeque<Long>> hitTimes = new java.util.HashMap<>();
+
+    /** How many times they've hit us in the last {@code within} ticks. */
+    public int hitsFrom(UUID who, int within) {
+        var hits = this.hitTimes.get(who);
+        if (hits == null) return 0;
+        int n = 0;
+        for (long t : hits) if (this.now - t <= within) n++;
+        return n;
+    }
+
     public void onKilledPerson(UUID who, BlockPos where) {
         this.unsettled.remove(who); // that's that settled
         this.killedAt.put(who, this.now);
@@ -2126,6 +2288,11 @@ public final class BotBrain {
                 : source.typeHolder().unwrapKey().map(k -> k.identifier().toString()).orElse("unknown");
         var where = net.minecraft.core.GlobalPos.of(bot.level().dimension(), bot.blockPosition());
         remember(BotMemory.EventType.DIED, cause, where, 1f);
+        if (net.joinedthegame.DebugLog.on()) {
+            this.recentDeaths.addLast(java.time.LocalTime.now().withNano(0) + " " + cause.replace("minecraft:", "") + " at "
+                    + bot.blockPosition().toShortString() + " while '" + activity() + "'");
+            while (this.recentDeaths.size() > 5) this.recentDeaths.removeFirst();
+        }
         // Who killed us: whoever struck the blow, or (knocked off a ledge, into lava) the game's credit.
         var credit = source.getEntity() != null ? source.getEntity() : bot.getKillCredit();
         if (credit instanceof net.minecraft.world.entity.player.Player killer && killer != bot) {

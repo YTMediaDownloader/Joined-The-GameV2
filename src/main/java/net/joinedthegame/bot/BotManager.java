@@ -248,7 +248,7 @@ public final class BotManager {
         BotRecord record = roster().get(name);
         BotPlayer bot = record == null ? null : online(record);
         if (bot == null) return Result.fail("joinedthegame.msg.not_here", name);
-        viewer.openMenu(BotInventoryMenu.provider(bot));
+        viewer.openMenu(BotInventoryMenu.provider(bot, !BotInventoryMenu.mayEdit(viewer)));
         return new Result(true, Component.empty());
     }
 

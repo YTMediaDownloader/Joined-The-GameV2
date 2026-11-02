@@ -233,6 +233,21 @@ public final class TrialChamberProject implements Task {
             this.sub = new CollectItems(drops.getFirst().blockPosition(), 6, 100);
             return Status.RUNNING;
         }
+        // A chest (or barrel) here in the room we've just cleared: loot it now, while it's quiet,
+        // like anyone working their way through. (The everyday chest-looting doesn't wander the
+        // chamber any more: it set spawners off all over and fought whatever came.)
+        if (!anySpawnerActive(bot)) {
+            BlockPos chest = net.joinedthegame.ai.Senses.findBlock(bot,
+                    s -> s.is(net.minecraft.world.level.block.Blocks.CHEST) || s.is(net.minecraft.world.level.block.Blocks.BARREL),
+                    12, 5, false, p -> brain.recentlyLooted(p) || brain.isBlacklisted(p) || !chamber.box().isInside(p));
+            if (chest != null) {
+                brain.markLooted(chest);
+                brain.log("trial chamber: a chest here, looting it while it's quiet");
+                this.sub = new net.joinedthegame.ai.task.LootChest(chest,
+                        s -> net.joinedthegame.ai.Junk.isKeeper(s) || net.joinedthegame.ai.Junk.isValuable(s), "Looting a chest in the trial chamber");
+                return Status.RUNNING;
+            }
+        }
         List<Chambers.Spawner> spawners = Chambers.spawners(bot.level(), chamber.box());
         List<Chambers.Vault> vaults = Chambers.vaults(bot, chamber.box());
 

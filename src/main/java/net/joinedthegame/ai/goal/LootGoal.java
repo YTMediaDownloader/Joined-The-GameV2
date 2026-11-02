@@ -62,7 +62,19 @@ public final class LootGoal extends Goal {
         this.chest = Senses.findBlock(bot, s -> s.is(Blocks.CHEST) || s.is(Blocks.BARREL) || s.is(Blocks.TRAPPED_CHEST), radius, yRadius, false,
                 p -> this.brain.recentlyLooted(p) || this.brain.isBlacklisted(p) || manager.isBotStorage(bot.level(), p)
                         // Bastion chests: every piglin around goes for you. Not without a plan.
-                        || here != null && here.kind() == Structures.Kind.BASTION);
+                        || here != null && here.kind() == Structures.Kind.BASTION
+                        // Trial chambers: the same. Wandering the corridors after chests sets the
+                        // spawners off one after another. The trial chamber run loots them, room by
+                        // room as it clears each one; not fit for that, leave them be.
+                        || here != null && here.kind() == Structures.Kind.TRIAL_CHAMBERS
+                        // ...even standing in something else that overlaps it (a mineshaft through a
+                        // chamber: MadisonBeer "raided the mineshaft" into the chamber, set the
+                        // spawners off and died to its strays nine times).
+                        || Structures.inTrialChamber(bot, p)
+                        // And not where we keep dying (a flooded mineshaft, a skeleton's nest).
+                        || this.brain.memory().nearest("death_hotspot", net.minecraft.core.GlobalPos.of(bot.level().dimension(), p), 12) != null
+                        // An outpost's chest isn't one to wander up to (that's a raid, with a plan).
+                        || here != null && here.kind() == Structures.Kind.PILLAGER_OUTPOST && !this.brain.raidingNow());
         this.cart = null;
         if (this.chest == null) {
             List<MinecartChest> carts = Senses.entitiesNear(bot, MinecartChest.class, radius,

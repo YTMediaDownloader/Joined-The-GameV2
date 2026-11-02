@@ -58,6 +58,11 @@ public final class Snapshot {
         root.addProperty("day", server.overworld().getOverworldClockTime() / 24000L);
         root.addProperty("timeOfDay", server.overworld().getOverworldClockTime() % 24000L);
         root.addProperty("night", server.overworld().isDarkOutside());
+        // How hard the server's working: over 50 ms a tick and it's falling behind ("Can't keep up!").
+        root.addProperty("msPerTick", Math.round(server.getAverageTickTimeNanos() / 100_000.0) / 10.0);
+        JsonObject chunks = new JsonObject();
+        for (var level : server.getAllLevels()) chunks.addProperty(level.dimension().identifier().toString(), level.getChunkSource().getLoadedChunksCount());
+        root.add("loadedChunks", chunks);
 
         JsonArray players = new JsonArray();
         for (ServerPlayer p : server.getPlayerList().getPlayers()) {
@@ -123,6 +128,17 @@ public final class Snapshot {
                 feelings.add(f);
             }
             o.add("feelings", feelings);
+            // Since the game started: the trouble at a glance, where the time went, how it died.
+            JsonObject st = new JsonObject();
+            brain.stats().forEach(st::addProperty);
+            o.add("stats", st);
+            JsonObject spent = new JsonObject();
+            brain.secondsOn().entrySet().stream().sorted((x, y) -> y.getValue() - x.getValue()).limit(8)
+                    .forEach(e -> spent.addProperty(e.getKey(), Math.round(e.getValue() / 6.0) / 10.0)); // minutes
+            o.add("timeSpent (minutes)", spent);
+            JsonArray deaths = new JsonArray();
+            for (String dd : brain.recentDeaths()) deaths.add(dd);
+            o.add("recentDeaths", deaths);
         }
         JsonObject gear = new JsonObject();
         for (EquipmentSlot slot : new EquipmentSlot[]{EquipmentSlot.HEAD, EquipmentSlot.CHEST, EquipmentSlot.LEGS, EquipmentSlot.FEET, EquipmentSlot.MAINHAND, EquipmentSlot.OFFHAND}) {

@@ -30,6 +30,7 @@ public final class ProgressionGoal extends Goal {
     private @Nullable Task task;
     private @Nullable Item working;
     private final Map<Item, Long> failedUntil = new HashMap<>();
+    private long toldWoodAt = Long.MIN_VALUE / 2;
 
     public ProgressionGoal(BotBrain brain) {
         super(brain);
@@ -194,13 +195,17 @@ public final class ProgressionGoal extends Goal {
             String id = net.minecraft.core.registries.BuiltInRegistries.ITEM.getKey(this.working).toString();
             if (!this.brain.memory().ever(net.joinedthegame.ai.BotMemory.EventType.MADE, id)) this.brain.remember(net.joinedthegame.ai.BotMemory.EventType.MADE, id, null, 0.7f);
         }
-        if (status == Task.Status.FAILED && this.working != null) {
+        // The pickaxe gave out half way: that's not the job failing, and not the moment to go off and
+        // do something else (Redlantern went "Exploring" underground with no pickaxe for half a
+        // minute): straight on to making a new one, here and now.
+        boolean toolBroke = this.task instanceof MineTask m && m.toolBroke();
+        if (status == Task.Status.FAILED && this.working != null && !toolBroke) {
             this.failedUntil.put(this.working, this.brain.now() + 20 * 90);
         }
         // A proper dig done: step back and let the brain decide what's next (other goals waited for
         // this). A quick fetch (a log or two for a table) carries straight on to what it was for,
         // or something else grabs the wood in between and it's back for more.
-        boolean bigDig = this.task instanceof MineTask mine && mine.wanted() > 4;
+        boolean bigDig = this.task instanceof MineTask mine && mine.wanted() > 4 && !toolBroke;
         this.task = null;
         return !bigDig;
     }
@@ -224,6 +229,17 @@ public final class ProgressionGoal extends Goal {
             if (step == null) continue;
             // Night and not geared for it: only work that keeps us underground (no trees).
             if (nightOutsideUnsafe(bot) && step instanceof Planner.Mine mine && !mine.source().isUnderground()) continue;
+            // Down a mine and this needs wood: that's a trek all the way up to the trees (bots went
+            // tunnelling up through the rock for a spare stick or crafting table). Only when there's
+            // no other way on: no pickaxe at all. The rest waits till we're back up top.
+            if (step instanceof Planner.Mine mine && mine.source() == Sources.LOGS && SleepGoal.deepUnderground(bot)
+                    && Inv.pickaxeTier(bot) > 0) {
+                if (now - this.toldWoodAt > 20 * 60 * 3) {
+                    this.toldWoodAt = now;
+                    this.brain.log("want " + Planner.name(want.item()) + ", but that needs wood and I'm down a mine: later");
+                }
+                continue;
+            }
             if (step instanceof Planner.Fail fail) {
                 this.brain.log("want " + Planner.name(want.item()) + ": " + fail.label());
                 this.failedUntil.put(want.item(), now + 20 * 120);

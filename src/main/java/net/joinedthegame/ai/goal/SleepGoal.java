@@ -90,6 +90,22 @@ public final class SleepGoal extends Goal {
         if (this.brain.now() - this.failedAt < 20 * 60 * 3 && net.joinedthegame.ai.task.HideTask.isHidden(bot)) return 0;
         // A nomad sleeps where night finds it: no trek back to last night's spot or a village.
         BlockPos bed = nomad ? null : homeBed(bot);
+        // Down a mine when night falls, and the bed's not just up the way: carry on down here (it's
+        // dark underground anyway, and there's nothing to hide from in a tunnel). Bots used to
+        // tunnel sideways through the rock toward a bed on the surface, run out of time half way,
+        // and go back to mining: the whole trip for nothing, night after night.
+        // (Once decided, that's tonight: no flicking back to "Sleeping" every time the tunnel climbs
+        // near the surface. Only out under the open sky does going to bed come back into it.)
+        long tonight = bot.level().getOverworldClockTime() / 24000L;
+        if (this.downTheMineNight == tonight && !bot.level().canSeeSky(bot.blockPosition())) return 0;
+        if (deepUnderground(bot) && (bed == null || bed.distSqr(bot.blockPosition()) > 24 * 24)) {
+            this.downTheMineNight = tonight;
+            if (this.brain.now() - this.toldMineAt > 20 * 60 * 8) {
+                this.toldMineAt = this.brain.now();
+                this.brain.log("night's fallen, but I'm down a mine: carrying on down here");
+            }
+            return 0;
+        }
         if (bed == null && (!nomad || Inv.count(bot, s -> s.is(ItemTags.BEDS)) == 0)) bed = claimableBed(bot);
         if (bed == null && !nomad) bed = villageBed(bot);
         this.bed = bed;
@@ -102,6 +118,27 @@ public final class SleepGoal extends Goal {
             if (player.isSleeping() && !(player instanceof BotPlayer)) return 90;
         }
         return 75; // above digging in (72): a bed always wins
+    }
+
+    private long toldMineAt = Long.MIN_VALUE / 2;
+    private long toldCampAt = Long.MIN_VALUE / 2;
+
+    /** Nothing hostile about this bed (sixteen blocks): safe enough to put our head down for the night. */
+    private static boolean quietAround(BotPlayer bot, BlockPos bed) {
+        return bot.level().getEntitiesOfClass(net.minecraft.world.entity.Mob.class, new AABB(bed).inflate(16),
+                m -> m.isAlive() && m instanceof net.minecraft.world.entity.monster.Enemy).isEmpty();
+    }
+    private long downTheMineNight = -1;
+
+    /**
+     * Well underground: no sky overhead and the surface a good way up (more than eight blocks), so
+     * getting to anything up there means a long climb or a dig.
+     */
+    public static boolean deepUnderground(BotPlayer bot) {
+        BlockPos at = bot.blockPosition();
+        if (bot.level().canSeeSky(at)) return false;
+        int surface = bot.level().getHeight(net.minecraft.world.level.levelgen.Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, at.getX(), at.getZ());
+        return surface - at.getY() > 8;
     }
 
     /** No home bed and not carrying one. */
@@ -135,7 +172,7 @@ public final class SleepGoal extends Goal {
                     BlockPos head = Homes.headOf(bot.level(), p);
                     if (bot.level().getBlockState(p).getValue(AbstractBedBlock.OCCUPIED) && !onlyVillagerIn(bot, head)) return true;
                     return manager.bedOwner(bot.level(), head) != null || Homes.isPlayerSpawnBed(bot.level(), head)
-                            || this.brain.isBlacklisted(p);
+                            || this.brain.isBlacklisted(p) || net.joinedthegame.ai.Structures.dangerousAt(bot, p) && !quietAround(bot, p);
                 });
     }
 
@@ -151,7 +188,7 @@ public final class SleepGoal extends Goal {
         GlobalPos here = GlobalPos.of(bot.level().dimension(), bot.blockPosition());
         GlobalPos village = this.brain.memory().nearest("village", here, VILLAGE_RANGE);
         if (village == null || !bot.level().isLoaded(village.pos())) return null;
-        return Homes.findFreeBed(bot.level(), village.pos(), 32, this.brain::isBlacklisted);
+        return Homes.findFreeBed(bot.level(), village.pos(), 32, p -> this.brain.isBlacklisted(p) || net.joinedthegame.ai.Structures.dangerousAt(bot, p));
     }
 
     @Override
@@ -171,7 +208,9 @@ public final class SleepGoal extends Goal {
     @Override
     public boolean tick(BotPlayer bot) {
         if (bot.isSleeping()) return true;
-        if (++this.ticks > 20 * 90) return giveUp();
+        // A minute and a half to get there and in; up to three if we're on the way (a walk home from
+        // the edge of range takes longer than that, and giving up a few blocks short wastes it all).
+        if (++this.ticks > 20 * 90 && !(this.ticks <= 20 * 180 && this.brain.navigator().isMoving())) return giveUp();
         if (this.task != null) {
             Task.Status status = this.task.tick(bot, this.brain);
             if (status == Task.Status.RUNNING) return true;
@@ -229,6 +268,13 @@ public final class SleepGoal extends Goal {
             // A nomad out roaming from its base: tonight's bed is just for tonight (packed up in
             // the morning), and home stays home.
             this.campBed = GlobalPos.of(bot.level().dimension(), bed);
+        } else if (net.joinedthegame.ai.Structures.dangerousAt(bot, bed)) {
+            // A bed in a trial chamber (or the like): a camp for tonight, on the way through. Not a
+            // home: not claimed, its chests aren't ours to fill, and we're off again in the morning.
+            if (this.brain.now() - this.toldCampAt > 20 * 60 * 10) {
+                this.toldCampAt = this.brain.now();
+                this.brain.log("sleeping here tonight, it's quiet; not living here, though");
+            }
         } else if (this.brain.record().home() == null || !this.brain.record().home().pos().equals(bed)) {
             manager.setHome(this.brain.record(), GlobalPos.of(bot.level().dimension(), bed));
             WorldView w = new WorldView(bot.level());

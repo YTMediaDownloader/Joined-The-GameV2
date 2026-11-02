@@ -54,12 +54,20 @@ public final class CraftTask implements Task {
         if (this.table == null || !bot.level().getBlockState(this.table).is(net.minecraft.world.level.block.Blocks.CRAFTING_TABLE)) {
             this.table = Senses.findBlock(bot, s -> s.is(net.minecraft.world.level.block.Blocks.CRAFTING_TABLE), 24, 8, false, brain::isBlacklisted);
             if (this.table == null) this.table = remembered(bot, brain, "crafting_table", net.minecraft.world.level.block.Blocks.CRAFTING_TABLE);
+            // Carrying one, and that one's a walk away or round the rock: put ours down here. (Madison,
+            // her pickaxe gone, tunnelled toward a table thirteen blocks off with one in her bag, got
+            // stuck, and went wandering: a table goes down in a second and comes back up after.)
+            if (this.table != null && Inv.count(bot, Items.CRAFTING_TABLE) > 0 && !BlockBreaker.canUse(bot, this.table)
+                    && (this.table.distSqr(bot.blockPosition()) > 6 * 6 || !BlockBreaker.canSee(bot, bot.getEyePosition(), this.table))) {
+                this.table = null;
+            }
             if (this.table == null) {
                 if (Inv.count(bot, Items.CRAFTING_TABLE) == 0) {
                     // No table we can reach: make one from planks, like anyone would.
                     Planner.Step make = new Planner(bot, false).next(Items.CRAFTING_TABLE, 1);
                     if (!(make instanceof Planner.Craft craft) || !craftNow(bot, craft)) return Status.FAILED;
                 }
+                if (brain.gettingOutOfWater(bot)) return Status.RUNNING; // not setting up in a pool
                 BlockPos spot = findPlacementSpot(bot);
                 if (spot == null) {
                     // Hemmed in: dig a nook in the wall and set it there.
@@ -154,7 +162,8 @@ public final class CraftTask implements Task {
                     for (Item item : this.step.grid()) {
                         if (item != null && Inv.count(bot, item) < count(this.step.grid(), item)) missing = true;
                     }
-                    brain.log(missing ? "craft: '" + this.step.label() + "': haven't got what it needs any more (used or put away since I planned it), rethinking"
+                    brain.log(this.noRoom ? "craft: '" + this.step.label() + "': no room in my bag to make that"
+                            : missing ? "craft: '" + this.step.label() + "': haven't got what it needs any more (used or put away since I planned it), rethinking"
                             : "craft: recipe didn't match the chosen items " + this.step.grid());
                 }
                 return i > 0 ? Status.DONE : Status.FAILED;
@@ -163,7 +172,21 @@ public final class CraftTask implements Task {
         return Status.DONE;
     }
 
+    private boolean noRoom;
+
+    /** Somewhere for the result: an empty slot, or a stack of the same it can go on top of. */
+    private boolean roomFor(BotPlayer bot) {
+        var inv = bot.getInventory();
+        return inv.getFreeSlot() >= 0 || inv.getSlotWithRemainingSpace(this.step.option().result()) >= 0;
+    }
+
     private boolean craftOnce(BotPlayer bot) {
+        // Room for what we're making first: a full bag dropped Redlantern's new diamond boots on the
+        // floor (and he went off to mine diamonds for another pair). Make room, or don't craft.
+        if (!roomFor(bot) && !net.joinedthegame.ai.Junk.makeRoom(bot)) {
+            this.noRoom = true;
+            return false;
+        }
         List<@Nullable Item> grid = this.step.grid();
         for (Item item : grid) {
             if (item != null && Inv.count(bot, item) < count(grid, item)) return false;
@@ -240,8 +263,14 @@ public final class CraftTask implements Task {
         return n;
     }
 
-    static void give(BotPlayer bot, ItemStack stack) {
-        if (!bot.getInventory().add(stack) && !stack.isEmpty()) bot.drop(stack, false, net.minecraft.util.Prediction.SERVER_ONLY);
+    public static void give(BotPlayer bot, ItemStack stack) {
+        if (!bot.getInventory().add(stack) && !stack.isEmpty()) {
+            // No room after all: down at our feet as an ordinary drop (not "thrown away": that one
+            // can't be picked up for minutes and gets ignored), to grab as soon as there's room.
+            var item = new net.minecraft.world.entity.item.ItemEntity(bot.level(), bot.getX(), bot.getY(), bot.getZ(), stack);
+            item.setPickUpDelay(10);
+            bot.level().addFreshEntity(item);
+        }
     }
 
     /**

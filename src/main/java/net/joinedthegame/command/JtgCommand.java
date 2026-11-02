@@ -438,7 +438,7 @@ public final class JtgCommand {
             try {
                 kind = net.joinedthegame.ai.goal.ProjectGoal.Kind.valueOf(which.toUpperCase(java.util.Locale.ROOT));
             } catch (IllegalArgumentException e) {
-                c.getSource().sendFailure(Component.literal("Use farm, wolf, decorate, bow, raid, enchant, trial_chamber, netherite or house"));
+                c.getSource().sendFailure(Component.literal("Use farm, wolf, decorate, bow, raid, enchant, trial_chamber, netherite, pen, trees, cane, garden, paths, brew or house"));
                 return 0;
             }
             brain.projects().force(kind, now);

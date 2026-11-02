@@ -105,6 +105,27 @@ public final class Structures {
     }
 
     /** Structures whose pieces reach into the loaded chunks within {@code chunkRadius} of the bot. */
+    /**
+     * Inside somewhere no one sensible lives: a trial chamber, a mansion, an outpost, a fortress, an
+     * ancient city (anything rated half-dangerous or worse; villages are fine). Its beds aren't a
+     * home and its chests aren't storage. Redlantern moved into a trial chamber's bedroom, between
+     * the spawners, and filled its loot chest with his things.
+     */
+    public static boolean dangerousAt(BotPlayer bot, net.minecraft.core.BlockPos pos) {
+        for (Known k : near(bot, 3)) {
+            if (k.kind().danger >= 0.5 && k.box().isInside(pos)) return true;
+        }
+        return false;
+    }
+
+    /** Inside a trial chamber's bounds (whatever else overlaps the spot). */
+    public static boolean inTrialChamber(BotPlayer bot, net.minecraft.core.BlockPos pos) {
+        for (Known k : near(bot, 3)) {
+            if (k.kind() == Kind.TRIAL_CHAMBERS && k.box().isInside(pos)) return true;
+        }
+        return false;
+    }
+
     public static List<Known> near(BotPlayer bot, int chunkRadius) {
         ServerLevel level = bot.level();
         ChunkPos center = bot.chunkPosition();

@@ -53,6 +53,10 @@ public final class CombatGoal extends Goal {
 
     // Retreat state
     private boolean retreating;
+    /** Cornered under fire: fight, don't go back to retreating, until then. */
+    private long fightItOutUntil;
+    private int stuckShielding;
+    private @org.jspecify.annotations.Nullable Vec3 shieldFrom;
     private int retreatTicks;
     private int safeTicks;
     private @Nullable BlockPos pillarBase;
@@ -121,8 +125,15 @@ public final class CombatGoal extends Goal {
 
     private static double danger(BotPlayer bot, List<Mob> mobs) {
         double total = 0;
-        for (Mob m : mobs) total += danger(bot, m);
-        return total;
+        int close = 0;
+        for (Mob m : mobs) {
+            total += danger(bot, m);
+            if (!isRanged(m) && m.distanceToSqr(bot) < 5 * 5) close++;
+        }
+        // A crowd is worse than its mobs added up: they come from every side, one hits while you
+        // swing at another, and the knockback pushes you into the next. Zombie crowds were a
+        // quarter of all deaths in the overnight run.
+        return total * (1 + 0.2 * Math.max(0, close - 1));
     }
 
     /**
@@ -233,6 +244,7 @@ public final class CombatGoal extends Goal {
     public void start(BotPlayer bot) {
         this.spearMode = Inv.spearIsBest(bot);
         this.smashStage = 0;
+        this.gap = null;
         this.ticks = 0;
         this.repathIn = 0;
         this.backOff = 0;
@@ -257,7 +269,24 @@ public final class CombatGoal extends Goal {
         if (++this.ticks > 20 * 60 && !(this.retreating && this.hide != null)) return false;
         List<Mob> nearby = threats(bot);
 
-        if (this.retreating || shouldRetreat(bot, nearby)) return retreat(bot, nearby);
+        // Half way through a potion: give it the moment (back off a little, facing them). Swapping
+        // to the sword now would waste it.
+        if (net.joinedthegame.ai.Potions.drinking(bot)) {
+            this.brain.navigator().stop(bot);
+            Mob near = nearby.stream().min(java.util.Comparator.comparingDouble(m -> m.distanceToSqr(bot))).orElse(null);
+            if (near != null) {
+                this.brain.controls().lookAt(bot, near.getBoundingBox().getCenter());
+                if (near.distanceToSqr(bot) < 4 * 4) this.brain.controls().forward = -0.7f;
+            }
+            return true;
+        }
+        if (!nearby.isEmpty() && net.joinedthegame.ai.Potions.fight(bot, this.brain, nearestDist(bot, nearby), danger(bot, nearby),
+                this.retreating)) return true;
+
+        // Cornered under fire earlier (couldn't back away, couldn't wall in): fighting it out, for
+        // a while, rather than going straight back to standing there behind a shield.
+        boolean cornered = this.brain.now() < this.fightItOutUntil;
+        if (!cornered && (this.retreating || shouldRetreat(bot, nearby))) return retreat(bot, nearby);
 
         LivingEntity target = this.target;
         if (target == null || !target.isAlive() || target.isRemoved() || target.level() != bot.level()
@@ -271,11 +300,16 @@ public final class CombatGoal extends Goal {
             this.target = target = next;
         }
 
-        // A creeper close by trumps everything: the zombie hurts, the creeper kills.
-        Mob creeperNear = nearby.stream().filter(m -> m instanceof Creeper && m.distanceToSqr(bot) < 7 * 7)
-                .min(java.util.Comparator.comparingDouble(m -> m.distanceToSqr(bot))).orElse(null);
-        if (creeperNear != null) this.target = target = creeperNear;
+        // The right one to hit: looked at again twice a second (straight away if a creeper's
+        // close), sticking with the one we're on unless something's clearly worse.
+        if (this.ticks % 10 == 0 || !(target instanceof Creeper)
+                && nearby.stream().anyMatch(m -> m instanceof Creeper && m.distanceToSqr(bot) < 7 * 7)) {
+            LivingEntity better = bestTarget(bot, nearby, target);
+            if (better != null) this.target = target = better;
+        }
         double dist = Math.sqrt(target.distanceToSqr(bot));
+        // Someone coming down on us with a mace: shield up, or out from under them.
+        if (net.joinedthegame.ai.skill.Duelist.dodgeSmash(bot, this.brain, target)) return true;
         // A mace smash under way (dropping off a ledge, or riding a wind charge up): see it through.
         if (this.smashStage != 0 && tryMace(bot, target, dist)) return true;
         if (this.spearMode && Inv.bestSpear(bot) >= 0) Inv.hold(bot, Inv.bestSpear(bot));
@@ -285,7 +319,14 @@ public final class CombatGoal extends Goal {
         // A bow or crossbow and something to shoot: keep our distance and shoot it.
         // (Never at a breeze: it bounces every arrow straight back, 26.3's projectile deflection.
         // Breezes are melee only.)
-        if (dist > 5 && dist < 28 && rangedSlot(bot) >= 0 && bot.hasLineOfSight(target) && !deflectsArrows(target)) return shoot(bot, target, dist);
+        // Not off our feet (knocked off a ledge, mid-jump, in the water: that's not when you start
+        // drawing a bow). And not an archer within reach of a shield: a bow can't block, so a bow
+        // duel just trades arrows, and with a shield and a sword the way to beat a skeleton is to
+        // walk in behind the shield and hit it. The bow's for the ones further off, or with no
+        // shield to hand.
+        boolean bowDuel = isRanged(target) && hasShield(bot) && dist < 14;
+        if (dist > 5 && dist < 28 && rangedSlot(bot) >= 0 && bot.hasLineOfSight(target) && !deflectsArrows(target)
+                && bot.onGround() && !bot.isInWater() && !bowDuel) return shoot(bot, target, dist);
         stopDrawing(bot);
         if (target instanceof Creeper creeper) return fightCreeper(bot, creeper, dist);
         if (isRanged(target) && dist > 3.5) return closeInOnArcher(bot, target, dist);
@@ -300,11 +341,15 @@ public final class CombatGoal extends Goal {
     private boolean melee(BotPlayer bot, LivingEntity target, double dist, int enemies) {
         Navigator nav = this.brain.navigator();
         float charge = bot.getAttackStrengthScale(0.5f);
+        List<Mob> crowd = meleeCrowd(bot, 6);
+        if (crowdTactics(bot, crowd)) return true;
+        boolean holding = this.gap != null && Navigator.feet(bot).equals(this.gap) && crowd.size() >= 2;
 
-        // Shield up while waiting for the swing to recharge, but only if hurt, outnumbered
-        // or just a nervous sort. Everyone else trusts their footwork.
+        // Shield up while waiting for the swing to recharge, if hurt, more than one of them on us,
+        // or just a nervous sort. One zombie: footwork's enough.
+        int onUs = (int) crowd.stream().filter(m -> m.distanceToSqr(bot) < 3 * 3).count();
         boolean defensive = hasShield(bot) && dist < 2.6 && charge < 0.8
-                && (cautious() || bot.getHealth() < bot.getMaxHealth() * 0.5f || enemies >= 3);
+                && (cautious() || bot.getHealth() < bot.getMaxHealth() * 0.5f || enemies >= 3 || onUs >= 2);
         if (defensive) {
             raiseShield(bot);
             nav.stop(bot);
@@ -312,12 +357,22 @@ public final class CombatGoal extends Goal {
         }
         lowerShield(bot);
 
-        // Just hit: step back out of its reach while the swing recharges.
+        // Just hit: step back out of its reach while the swing recharges. (Not out of the gap
+        // we've backed into: that's the whole point of it.)
         if (this.backOff > 0) {
             this.backOff--;
             nav.stop(bot);
-            this.brain.controls().forward = -1f;
-            this.brain.controls().strafe = this.weave % 2 == 0 ? 0.4f : -0.4f;
+            if (!holding) {
+                this.brain.controls().forward = -1f;
+                this.brain.controls().strafe = this.weave % 2 == 0 ? 0.4f : -0.4f;
+            }
+            return true;
+        }
+
+        // In the gap: let them come to us, one at a time.
+        if (holding && dist > 3.2) {
+            nav.stop(bot);
+            if (hasShield(bot) && dist < 5) raiseShield(bot);
             return true;
         }
 
@@ -341,7 +396,15 @@ public final class CombatGoal extends Goal {
         // Charged: step in and go for a critical hit (jump, hit on the way down).
         this.brain.controls().forward = dist > 2.4 ? 1f : 0f;
         this.brain.controls().sprint = false;
+        // Actually stop sprinting: letting go of the key isn't enough, a sprint carries on till
+        // something stops it, and a sprinting hit is never a critical (it's a knockback hit).
+        // Bots "never really got crits" for that.
+        if (bot.isSprinting()) bot.setSprinting(false);
         boolean canJump = bot.onGround() && !bot.isInWater() && new WorldView(bot.level()).passable(bot.blockPosition().above(2));
+        // Two or more in reach and a sword: a hit on the ground sweeps the lot (a jumping crit
+        // doesn't sweep). One at a time: the crit.
+        boolean sweep = onUs >= 2 && bot.getMainHandItem().is(net.minecraft.tags.ItemTags.SWORDS);
+        if (sweep) canJump = false;
         if (canJump && !this.jumpedForCrit && dist < 3.0) {
             this.brain.controls().jump = true;
             this.jumpedForCrit = true;
@@ -349,13 +412,140 @@ public final class CombatGoal extends Goal {
         }
         boolean falling = !bot.onGround() && bot.getDeltaMovement().y < 0;
         boolean landedWithoutHit = this.jumpedForCrit && bot.onGround();
-        if (dist <= 3.0 && (falling || !canJump || landedWithoutHit) && bot.hasLineOfSight(target)) {
+        // In reach the game's way (eyes to the nearest bit of it), as we come down.
+        if (bot.isWithinEntityInteractionRange(target, -0.1) && (falling || !canJump || landedWithoutHit) && bot.hasLineOfSight(target)) {
+            if (falling && bot.isSprinting()) bot.setSprinting(false);
             swing(bot, target);
             this.jumpedForCrit = false;
             this.backOff = 6 + bot.getRandom().nextInt(4);
             this.weave++;
         }
         return true;
+    }
+
+    // --- picking the target ---------------------------------------------------------------
+
+    /**
+     * Which one to hit: the most dangerous for how close it is. A creeper within seven blocks
+     * beats everything (the zombie hurts, the creeper kills); whatever's hitting us right now
+     * beats an archer across the field (charging the archer with a zombie on our back is how the
+     * zombie gets the kill); and the one we're on gets a bit of a pull, so we don't flit about.
+     */
+    private @Nullable LivingEntity bestTarget(BotPlayer bot, List<Mob> nearby, LivingEntity current) {
+        LivingEntity best = null;
+        double bestScore = 0;
+        for (Mob m : nearby) {
+            double dist = Math.sqrt(m.distanceToSqr(bot));
+            if (dist > 3 && !bot.hasLineOfSight(m)) continue;
+            double score = danger(bot, m) / Math.max(1.0, dist);
+            if (m instanceof Creeper && dist < 7) score += 100;
+            if (m.getTarget() == bot) score *= 1.5;
+            if (dist < 3 && !isRanged(m)) score *= 2.0; // on us now
+            if (isRanged(m) && m.isUsingItem() && !hasShield(bot) && dist < 16 && nearestMelee(bot, nearby) > 4) score *= 1.5;
+            if (m == current) score *= 1.3;
+            if (score > bestScore) {
+                bestScore = score;
+                best = m;
+            }
+        }
+        // The one we're on isn't a mob (a person who hit us): keep it unless a creeper's close.
+        if (current != null && !(current instanceof Mob) && current.isAlive() && !(best instanceof Creeper)) return current;
+        return best;
+    }
+
+    private static double nearestMelee(BotPlayer bot, List<Mob> mobs) {
+        double best = Double.MAX_VALUE;
+        for (Mob m : mobs) if (!isRanged(m)) best = Math.min(best, Math.sqrt(m.distanceToSqr(bot)));
+        return best;
+    }
+
+    // --- crowds -----------------------------------------------------------------------------
+
+    /** The gap we've backed into (feet), and how long we've been trying to get there. */
+    private @Nullable BlockPos gap;
+    private int gapTicks;
+    private long gapTriedAt = -1000;
+
+    /** The ones that fight up close, within {@code r}. */
+    private List<Mob> meleeCrowd(BotPlayer bot, double r) {
+        return hostilesNear(bot, r).stream().filter(m -> !isRanged(m) && !(m instanceof Creeper)).toList();
+    }
+
+    /**
+     * Three or more coming at us in the open: back into a gap close by (a nook, a doorway, a
+     * one-wide passage) so they can only come at us one or two at a time, from the front, and hold
+     * it. That's what a player does with a horde: never fight it in the open. True while we're
+     * on our way there.
+     */
+    private boolean crowdTactics(BotPlayer bot, List<Mob> crowd) {
+        Navigator nav = this.brain.navigator();
+        if (crowd.size() < 3) {
+            this.gap = null;
+            return false;
+        }
+        if (this.gap != null) {
+            if (Navigator.feet(bot).equals(this.gap)) return false; // there: fight from here
+            if (++this.gapTicks > 50 || nav.status() == Navigator.Status.FAILED) {
+                this.gap = null; // couldn't get there in time: fight where we are
+                return false;
+            }
+            BlockPos to = this.gap;
+            if (!nav.isMoving()) nav.moveTo(bot, Vec3.atBottomCenterOf(to), p -> p.equals(to));
+            nav.sprint = true;
+            return true;
+        }
+        if (this.brain.now() - this.gapTriedAt < 20 * 6) return false;
+        this.gapTriedAt = this.brain.now();
+        WorldView w = new WorldView(bot.level());
+        BlockPos feet = Navigator.feet(bot);
+        if (openSides(w, feet) <= 1) {
+            this.gap = feet.immutable(); // already in one
+            return false;
+        }
+        Vec3 center = Vec3.ZERO;
+        for (Mob m : crowd) center = center.add(m.position());
+        center = center.scale(1.0 / crowd.size());
+        BlockPos best = null;
+        double bestScore = Double.MAX_VALUE;
+        for (BlockPos c : BlockPos.betweenClosed(feet.offset(-5, -1, -5), feet.offset(5, 1, 5))) {
+            if (!w.passable(c) || !w.passable(c.above()) || !w.solidFloor(c.below())) continue;
+            if (WorldView.isDangerous(w.state(c)) || WorldView.isDangerous(w.state(c.below()))) continue;
+            int open = openSides(w, c);
+            if (open == 0 || open > 2) continue; // shut in, or no better than here
+            Vec3 at = Vec3.atBottomCenterOf(c);
+            // Not into the middle of them: no closer to the crowd than we are now, and none on it.
+            if (at.distanceTo(center) < bot.position().distanceTo(center) - 1.0) continue;
+            boolean taken = false;
+            for (Mob m : crowd) if (m.position().distanceTo(at) < 1.5) taken = true;
+            if (taken) continue;
+            double score = at.distanceTo(bot.position()) + (open == 2 ? 2 : 0);
+            if (score < bestScore) {
+                bestScore = score;
+                best = c.immutable();
+            }
+        }
+        if (best == null) {
+            this.brain.log("a crowd of " + crowd.size() + " and no gap close by: fighting it here");
+            return false;
+        }
+        this.gap = best;
+        this.gapTicks = 0;
+        this.brain.log("a crowd of " + crowd.size() + ": backing into the gap at " + best.toShortString() + " so they come one at a time");
+        nav.stop(bot);
+        nav.sprint = true;
+        BlockPos to = best;
+        nav.moveTo(bot, Vec3.atBottomCenterOf(to), p -> p.equals(to));
+        return true;
+    }
+
+    /** Ways in to this spot a mob could walk (two high, floor under it). */
+    private static int openSides(WorldView w, BlockPos c) {
+        int open = 0;
+        for (net.minecraft.core.Direction d : net.minecraft.core.Direction.Plane.HORIZONTAL) {
+            BlockPos n = c.relative(d);
+            if (w.passable(n) && w.passable(n.above()) && (w.solidFloor(n.below()) || w.passable(n.below()) && w.solidFloor(n.below(2)))) open++;
+        }
+        return open;
     }
 
     // --- spear ------------------------------------------------------------------------
@@ -505,6 +695,16 @@ public final class CombatGoal extends Goal {
     }
 
     private void swing(BotPlayer bot, LivingEntity target) {
+        // The right thing in hand first. Some ways into a swing (something getting into the hole
+        // with us, backing off, charging an archer) came straight from shooting, and hit with the
+        // bow. Swapped just now? Then not this swing: the game resets the charge on a swap, so it'd
+        // be a weak one anyway. Next time round.
+        stopDrawing(bot);
+        int weapon = this.spearMode && Inv.bestSpear(bot) >= 0 ? Inv.bestSpear(bot) : Inv.bestWeapon(bot);
+        if (weapon >= 0 && !ItemStack.isSameItemSameComponents(bot.getMainHandItem(), bot.getInventory().getItem(weapon))) {
+            Inv.hold(bot, weapon);
+            return;
+        }
         bot.attack(target);
         bot.swing(InteractionHand.MAIN_HAND, SwingAnimation.DEFAULT, false);
         bot.resetLastActionTime();
@@ -525,6 +725,21 @@ public final class CombatGoal extends Goal {
     private boolean shoot(BotPlayer bot, LivingEntity target, double dist) {
         Navigator nav = this.brain.navigator();
         nav.stop(bot);
+        // Shooting it out with an archer: when it draws and we're not nearly ready ourselves, bow
+        // down, shield up to take its arrow, then back to it. (A bow can't block: drawing through
+        // its shot is taking the hit.)
+        if (isRanged(target) && target.isUsingItem() && hasShield(bot) && this.drawTicks < 14) {
+            stopDrawing(bot);
+            this.drawTicks = 0;
+            this.brain.holdShield(8);
+            raiseShield(bot);
+            this.brain.controls().lookAt(bot, target.getBoundingBox().getCenter());
+            return true;
+        }
+        if (this.brain.shieldHeld() && hasShield(bot)) {
+            raiseShield(bot); // the arrow's still on its way
+            return true;
+        }
         lowerShield(bot);
         Inv.hold(bot, rangedSlot(bot));
         ItemStack held = bot.getMainHandItem();
@@ -575,6 +790,10 @@ public final class CombatGoal extends Goal {
         boolean drawing = (archer.isUsingItem() || archer instanceof net.minecraft.world.entity.monster.Blaze blaze && blaze.isOnFire())
                 && bot.hasLineOfSight(archer);
         if (drawing) this.brain.holdShield(3);
+        // No shield, nothing to shoot back with, and it's well off: charging across open ground
+        // is three or four arrows in the face. Get round a corner instead; a skeleton that can't
+        // see you walks over to find you, and comes round it into sword range.
+        if (!hasShield(bot) && rangedSlot(bot) < 0 && ambush(bot, archer, dist)) return true;
         if (this.brain.shieldHeld() && hasShield(bot)) {
             // Arrow incoming: face it with the shield and keep walking in behind it.
             raiseShield(bot);
@@ -603,6 +822,64 @@ public final class CombatGoal extends Goal {
         return dist < 24;
     }
 
+    /** The corner we're waiting behind for an archer, and since when. */
+    private @Nullable BlockPos cover;
+    private int coverTicks;
+    private long coverTriedAt = -1000;
+
+    /**
+     * Wait round a corner for an archer (see closeInOnArcher). True while we're getting there or
+     * waiting; false once it's close (go and hit it), after a while (it's not coming: charge), or
+     * if there's no corner handy.
+     */
+    private boolean ambush(BotPlayer bot, LivingEntity archer, double dist) {
+        Navigator nav = this.brain.navigator();
+        if (dist < 4.5 || archer instanceof net.minecraft.world.entity.monster.Blaze || archer instanceof net.minecraft.world.entity.monster.Ghast) {
+            this.cover = null; // close enough to hit; and flyers come over the top anyway
+            return false;
+        }
+        if (this.cover == null) {
+            if (dist < 9 || this.brain.now() - this.coverTriedAt < 20 * 15) return false;
+            this.coverTriedAt = this.brain.now();
+            WorldView w = new WorldView(bot.level());
+            BlockPos feet = Navigator.feet(bot);
+            BlockPos best = null;
+            double bestDist = Double.MAX_VALUE;
+            for (BlockPos c : BlockPos.betweenClosed(feet.offset(-5, -1, -5), feet.offset(5, 1, 5))) {
+                if (!w.passable(c) || !w.passable(c.above()) || !w.solidFloor(c.below()) || WorldView.isDangerous(w.state(c.below()))) continue;
+                Vec3 head = Vec3.atBottomCenterOf(c).add(0, 1.6, 0);
+                if (Math.sqrt(c.distToCenterSqr(archer.position())) < dist - 2) continue; // not towards it
+                var hit = bot.level().clip(new net.minecraft.world.level.ClipContext(archer.getEyePosition(), head,
+                        net.minecraft.world.level.ClipContext.Block.COLLIDER, net.minecraft.world.level.ClipContext.Fluid.NONE, archer));
+                if (hit.getType() != net.minecraft.world.phys.HitResult.Type.BLOCK) continue; // it can see there
+                double d = c.distToCenterSqr(bot.position());
+                if (d < bestDist) {
+                    bestDist = d;
+                    best = c.immutable();
+                }
+            }
+            if (best == null) return false;
+            this.cover = best;
+            this.coverTicks = 0;
+            this.brain.log("no shield against the " + archer.getType().getDescription().getString().toLowerCase(java.util.Locale.ROOT)
+                    + ": round the corner at " + best.toShortString() + " to let it come to me");
+        }
+        if (++this.coverTicks > 20 * 15) {
+            this.cover = null; // it's not coming: go for it after all
+            return false;
+        }
+        BlockPos to = this.cover;
+        if (!Navigator.feet(bot).equals(to)) {
+            nav.sprint = true;
+            if (!nav.isMoving()) nav.moveTo(bot, Vec3.atBottomCenterOf(to), p -> p.equals(to));
+            if (nav.status() == Navigator.Status.FAILED) this.cover = null;
+            return this.cover != null;
+        }
+        nav.stop(bot);
+        this.brain.controls().lookAt(bot, archer.getBoundingBox().getCenter());
+        return true;
+    }
+
     // --- creepers -------------------------------------------------------------------------
 
     private int creeperBackOff;
@@ -616,7 +893,10 @@ public final class CombatGoal extends Goal {
         Navigator nav = this.brain.navigator();
         boolean hissing = creeper.getSwellDir() > 0;
         if (hissing && dist < 6) {
-            if (hasShield(bot) && dist < 2.5) {
+            // A shield, facing it, takes the whole blast: better than turning our back to run and
+            // being caught a few blocks off (the fuse is a second and a half; the blast reaches
+            // further than that). Bots ran with their shields down and died with them.
+            if (hasShield(bot) && dist < 5) {
                 nav.stop(bot);
                 this.brain.holdShield(3);
                 raiseShield(bot);
@@ -716,7 +996,7 @@ public final class CombatGoal extends Goal {
         if (nearby.stream().anyMatch(CombatGoal::shootingFromWater)) return true;
         // A crowd and already hurt.
         this.retreatWhy = "a crowd, and hurt";
-        return nearby.size() >= 3 && bot.getHealth() <= 10;
+        return nearby.size() >= 3 && bot.getHealth() <= 12 || nearby.size() >= 5 && bot.getHealth() <= 15;
     }
 
     /** The ground a step that way is solid, safe to stand on, and not a drop. */
@@ -844,6 +1124,28 @@ public final class CombatGoal extends Goal {
             Vec3 side = new Vec3(-back.z, 0, back.x).scale((this.retreatTicks / 25) % 2 == 0 ? 1 : -1);
             boolean backOk = safeStep(bot, back);
             boolean sideOk = safeStep(bot, side);
+            // Getting nowhere (in a hole, against a wall: nowhere safe to step) and still being hit
+            // (several of them, from all round: a shield only covers the front)? Standing there is
+            // the worst of both. Redlantern stood a minute and a half in a pit behind his shield
+            // while the bogged took him from fifteen health to six. Wall in if we've the blocks,
+            // otherwise go for them.
+            boolean hurtLately = this.brain.now() - this.brain.lastAttackedAt() < 40;
+            if (!backOk && !sideOk || hurtLately && bot.position().distanceToSqr(this.shieldFrom == null ? bot.position() : this.shieldFrom) < 1) this.stuckShielding++;
+            else this.stuckShielding = 0;
+            if (this.shieldFrom == null || this.retreatTicks % 40 == 0) this.shieldFrom = bot.position();
+            if (this.stuckShielding > 60) {
+                this.stuckShielding = 0;
+                lowerShield(bot);
+                if (Inv.scaffoldCount(bot) >= 9 && bot.onGround() && !this.noBuilding) {
+                    this.hide = net.joinedthegame.ai.task.HideTask.box();
+                    this.brain.log("can't back away from them and still getting hit: walling myself in");
+                } else {
+                    this.retreating = false;
+                    this.fightItOutUntil = this.brain.now() + 20 * 20;
+                    this.brain.log("can't back away from them and still getting hit: going for them");
+                }
+                return true;
+            }
             this.brain.controls().forward = backOk ? -1f : 0f;
             this.brain.controls().strafe = sideOk ? ((this.retreatTicks / 25) % 2 == 0 ? 0.4f : -0.4f) : 0f;
             if (backOk && bot.horizontalCollision && bot.onGround()) this.brain.controls().jump = true;
@@ -1010,8 +1312,15 @@ public final class CombatGoal extends Goal {
                 }
             }
         }
-        if (hidden && bot.getFoodData().getFoodLevel() < 20 && bot.getHealth() < bot.getMaxHealth()) {
+        // Eat to heal: not only once perfectly hidden (Redlantern sat half a minute at eight health
+        // in a hole a bogged could still see into, food at seventeen, which is one short of healing
+        // at all, and never ate). Nothing right on us is enough. Low, a golden apple first.
+        if ((hidden || nearestDist(bot, nearby) > 4) && bot.getFoodData().getFoodLevel() < 20 && bot.getHealth() < bot.getMaxHealth()) {
             int food = Inv.bestFood(bot, bot.getFoodData().getFoodLevel() <= 6);
+            if (bot.getHealth() <= 6) {
+                int golden = Inv.find(bot, st -> st.is(Items.GOLDEN_APPLE) || st.is(Items.ENCHANTED_GOLDEN_APPLE));
+                if (golden >= 0) food = golden;
+            }
             if (food >= 0 && !bot.isUsingItem()) {
                 Inv.hold(bot, food);
                 bot.gameMode.useItem(bot, bot.level(), bot.getMainHandItem(), InteractionHand.MAIN_HAND);

@@ -696,7 +696,8 @@ public final class NetherTrip implements Task {
         // Beaten up: go home and heal rather than push our luck in a fortress.
         boolean hurtAndHungry = bot.getHealth() < 10 || bot.getHealth() < 14 && Inv.bestFood(bot, false) < 0;
         if (timeUp || bagFull || hurtAndHungry
-                || this.purpose == Purpose.BLAZE && Inv.count(bot, Items.BLAZE_ROD) >= RODS_WANTED && this.netherStep >= 5) {
+                || this.purpose == Purpose.BLAZE && Inv.count(bot, Items.BLAZE_ROD) >= RODS_WANTED && this.netherStep >= 5
+                        && (this.wartTried || Inv.count(bot, Items.NETHER_WART) >= HarvestWart.WART_WANTED)) {
             this.stage = Stage.RETURN;
             return Status.RUNNING;
         }
@@ -741,6 +742,17 @@ public final class NetherTrip implements Task {
                     this.note = ", heading to a fortress";
                     this.sub = new TravelTask(fortress.pos(), 24, "Heading to a nether fortress");
                 } else {
+                    // Into the fortress: blazes set you alight, and there's lava about. Fire
+                    // resistance first, if we've brought any.
+                    net.joinedthegame.ai.Potions.useFor(bot, brain, net.minecraft.world.effect.MobEffects.FIRE_RESISTANCE, false, "going into the fortress");
+                    // Nether wart grows in the fortress gardens: the base of every potion. Some of
+                    // that first (and a bit of the soul sand it grows in, to grow our own at home).
+                    if (!this.wartTried && Inv.count(bot, Items.NETHER_WART) < HarvestWart.WART_WANTED) {
+                        this.wartTried = true;
+                        this.note = ", picking nether wart";
+                        this.sub = new HarvestWart();
+                        return Status.RUNNING;
+                    }
                     this.note = ", hunting blazes";
                     this.sub = new HuntBlazes();
                 }
@@ -765,6 +777,7 @@ public final class NetherTrip implements Task {
             BastionRaid raid = BastionRaid.pick(bot, brain);
             if (raid != null) {
                 this.bastionTried = true;
+                net.joinedthegame.ai.Potions.useFor(bot, brain, net.minecraft.world.effect.MobEffects.FIRE_RESISTANCE, false, "going into a bastion");
                 this.note = raid.treasure() ? ", raiding a treasure bastion" : ", raiding a bastion";
                 this.sub = raid;
                 return Status.RUNNING;
@@ -805,6 +818,77 @@ public final class NetherTrip implements Task {
         return new TravelTask(new BlockPos(x, bot.getBlockY(), z), 10, "Exploring the nether");
     }
 
+    private boolean wartTried;
+
+    /**
+     * Nether wart from a fortress garden (the soul sand beds by the stairs), and a couple of the
+     * soul sand blocks under it to plant some at home. Ripe wart only (young wart drops just one).
+     */
+    static final class HarvestWart implements Task {
+        static final int WART_WANTED = 8;
+        private @Nullable BlockPos at;
+        private @Nullable Task collect;
+        private int ticks;
+        private int picked;
+
+        @Override
+        public String activity() {
+            return "Picking nether wart";
+        }
+
+        @Override
+        public Status tick(BotPlayer bot, BotBrain brain) {
+            if (this.collect != null) {
+                if (this.collect.tick(bot, brain) == Status.RUNNING) return Status.RUNNING;
+                this.collect.stop(bot, brain);
+                this.collect = null;
+            }
+            if (++this.ticks > 20 * 120) return Status.DONE;
+            boolean sandDone = Inv.count(bot, Items.SOUL_SAND) >= 2;
+            if (Inv.count(bot, Items.NETHER_WART) >= WART_WANTED && sandDone) return Status.DONE;
+            var level = bot.level();
+            if (this.at == null || level.getBlockState(this.at).isAir()) {
+                this.at = Senses.findBlock(bot, s -> s.is(Blocks.NETHER_WART) && s.getValue(net.minecraft.world.level.block.NetherWartBlock.AGE) >= 3,
+                        24, 12, false, brain::isBlacklisted);
+                if (this.at == null && !sandDone && this.picked > 0) {
+                    // The wart's picked: one of the beds it was in, for home.
+                    this.at = Senses.findBlock(bot, s -> s.is(Blocks.SOUL_SAND), 8, 4, true, brain::isBlacklisted);
+                }
+                if (this.at == null) {
+                    brain.log("nether: " + (this.picked > 0 ? "picked " + Inv.count(bot, Items.NETHER_WART) + " nether wart" : "no ripe nether wart here"));
+                    return Status.DONE;
+                }
+            }
+            BlockPos target = this.at;
+            if (!BlockBreaker.inReach(bot, target)) {
+                Navigator nav = brain.navigator();
+                if (!nav.isMoving()) {
+                    nav.moveToReach(bot, target);
+                    if (nav.status() == Navigator.Status.FAILED) {
+                        brain.blacklist(target);
+                        this.at = null;
+                    }
+                }
+                return Status.RUNNING;
+            }
+            brain.navigator().stop(bot);
+            if (!target.equals(brain.breaker().target())) brain.breaker().start(target);
+            BlockBreaker.Result r = brain.breaker().tick(bot, brain.controls());
+            if (r == BlockBreaker.Result.RUNNING) return Status.RUNNING;
+            if (r == BlockBreaker.Result.FAILED) brain.blacklist(target);
+            else this.picked++;
+            this.at = null;
+            this.collect = new net.joinedthegame.ai.task.CollectItems(target, 4, 60);
+            return Status.RUNNING;
+        }
+
+        @Override
+        public void stop(BotPlayer bot, BotBrain brain) {
+            brain.navigator().stop(bot);
+            if (this.collect != null) this.collect.stop(bot, brain);
+        }
+    }
+
     /** Hang about near a blaze spawner and let the fight come to us (CombatGoal does the fighting). */
     static final class HuntBlazes implements Task {
         private @Nullable BlockPos spawner;
@@ -819,6 +903,8 @@ public final class NetherTrip implements Task {
         public Status tick(BotPlayer bot, BotBrain brain) {
             if (Inv.count(bot, Items.BLAZE_ROD) >= RODS_WANTED) return Status.DONE;
             if (++this.ticks > 20 * 60 * 5) return Status.DONE;
+            // Worn off while we're still at it: another, if there's one.
+            if (this.ticks % 20 == 0) net.joinedthegame.ai.Potions.useFor(bot, brain, net.minecraft.world.effect.MobEffects.FIRE_RESISTANCE, false, "still hunting blazes");
             if (this.spawner == null) {
                 this.spawner = Senses.findBlock(bot, s -> s.is(Blocks.SPAWNER), 32, 16, false, p -> false);
                 if (this.spawner == null) {

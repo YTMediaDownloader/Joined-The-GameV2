@@ -24,7 +24,7 @@ import org.jspecify.annotations.Nullable;
  * one step at a time. Only runs when the bot's focus is {@link BotBrain.Focus#PROJECT}.
  */
 public final class ProjectGoal extends Goal {
-    public enum Kind { FARM, WOLF, DECORATE, BOW, RAID, VILLAGE_RAID, ENCHANT, TRIAL_CHAMBER, NETHERITE, PEN, TREES, CANE, GARDEN, PATHS }
+    public enum Kind { FARM, WOLF, DECORATE, BOW, RAID, VILLAGE_RAID, ENCHANT, TRIAL_CHAMBER, NETHERITE, PEN, TREES, CANE, GARDEN, PATHS, BREW }
 
     private @Nullable Kind kind;
     private @Nullable Task task;
@@ -54,8 +54,15 @@ public final class ProjectGoal extends Goal {
             case ENCHANT -> net.joinedthegame.ai.project.EnchantProject.worthIt(bot, this.brain);
             case TRIAL_CHAMBER -> {
                 GlobalPos c = net.joinedthegame.ai.project.TrialChamberProject.pick(bot, this.brain);
-                yield c != null && net.joinedthegame.ai.project.TrialChamberProject.notReady(bot, this.brain, false,
-                        this.brain.memory().chamber(c).deaths) == null;
+                if (c == null) yield false;
+                String why = net.joinedthegame.ai.project.TrialChamberProject.notReady(bot, this.brain, false, this.brain.memory().chamber(c).deaths);
+                // Knows of one but isn't fit for it yet: say what's missing now and then, so it's
+                // plain why it hasn't gone (Redlantern found one and "just didn't").
+                if (why != null && this.brain.now() - this.toldChamberAt > 20 * 60 * 10) {
+                    this.toldChamberAt = this.brain.now();
+                    this.brain.log("I know a trial chamber at " + c.pos().toShortString() + ", but I'm not ready for it yet (" + why + ")");
+                }
+                yield why == null;
             }
             // Late game: a diamond pickaxe and a real diamond loadout worth upgrading.
             case NETHERITE -> net.joinedthegame.ai.project.NetheriteProject.worthIt(bot);
@@ -64,6 +71,7 @@ public final class ProjectGoal extends Goal {
             case CANE -> net.joinedthegame.ai.project.CaneProject.available(bot, this.brain);
             case GARDEN -> net.joinedthegame.ai.project.GardenProject.available(bot, this.brain);
             case PATHS -> net.joinedthegame.ai.project.PathsProject.available(bot, this.brain);
+            case BREW -> net.joinedthegame.ai.project.BrewProject.worthIt(bot, this.brain);
         };
     }
 
@@ -90,6 +98,8 @@ public final class ProjectGoal extends Goal {
             case CANE -> 0.2 + p.scholar() * 0.5 + p.diligent() * 0.2 + p.homebody() * 0.2;
             case GARDEN -> 0.2 + p.builder() * 0.6 + p.homebody() * 0.5 + p.social() * 0.2;
             case PATHS -> 0.2 + p.builder() * 0.6 + p.diligent() * 0.3 + p.homebody() * 0.3;
+            // The studious like the craft of it; the brave like what it's for (fights).
+            case BREW -> 0.5 + p.scholar() * 1.0 + p.brave() * 0.4 + p.diligent() * 0.3;
         };
     }
 
@@ -104,12 +114,20 @@ public final class ProjectGoal extends Goal {
     }
 
     /** The most appealing project that's ready, by the needs it meets (0 if none). */
+    private long toldChamberAt = Long.MIN_VALUE / 2;
+
     public double bestAppeal(BotPlayer bot) {
         double best = 0;
         for (Kind k : Kind.values()) {
             if (!ready(bot, k)) continue;
             double a = net.joinedthegame.ai.life.Activities.appeal(k, this.brain.needs(), this.brain.personality());
             if (this.brain.memory().unfinished.contains(k.name().toLowerCase(Locale.ROOT))) a += 0.4; // started, never finished
+            // A trial chamber found close by, never done, and we're fit for it: that's exciting, not
+            // one more thing on a list. (It sat at 0.4 against diamonds' 1.0 and lost every roll.)
+            if (k == Kind.TRIAL_CHAMBER) {
+                GlobalPos c = net.joinedthegame.ai.project.TrialChamberProject.pick(bot, this.brain);
+                if (c != null && c.pos().distSqr(bot.blockPosition()) < 200 * 200 && this.brain.memory().chamber(c).deaths == 0) a += 0.8;
+            }
             best = Math.max(best, a);
         }
         return best;
@@ -238,13 +256,29 @@ public final class ProjectGoal extends Goal {
 
     @Override
     public int priority(BotPlayer bot) {
+        // Standing in a trial chamber and fit for it: that's the thing to do now, whatever today's
+        // plan said. (Otherwise chest-looting walked it round the corridors setting spawners off and
+        // fighting whatever came, never taking a spawner on or opening a vault.)
+        // (Any time of day: a chamber's always deep underground, night or not.)
+        if (this.kind != Kind.TRIAL_CHAMBER && this.brain.now() % 40 == 0
+                && net.joinedthegame.ai.project.TrialChamberProject.inChamber(bot) && available(bot, Kind.TRIAL_CHAMBER)) {
+            this.brain.log("I'm in a trial chamber and I'm ready for it: taking it on");
+            this.task = null;
+            this.kind = Kind.TRIAL_CHAMBER;
+            this.brain.memory().project = this.kind.name().toLowerCase(Locale.ROOT);
+            this.brain.setFocus(BotBrain.Focus.PROJECT, this.brain.now());
+        }
         if (this.brain.focus() != BotBrain.Focus.PROJECT) return 0;
         // In a trial chamber: committed. Above everyday gearing up and loot-grabbing (mining a bit
         // of iron on the way past isn't a reason to drop it); fights, food and emergencies still win.
         // (Already standing in one counts too: otherwise looting its chests, at 46, beats starting.)
         if (this.kind == Kind.TRIAL_CHAMBER && (this.task != null
                 || net.joinedthegame.ai.project.TrialChamberProject.inChamber(bot))) return 58;
-        if (bot.level().isDarkOutside()) return 0;
+        // Night: the surface projects (a farm, a pen, a garden) wait for morning. A trial chamber run
+        // doesn't, if we're already down there: it's underground either way (Redlantern walked
+        // straight through his chamber to mine diamonds, "because it was night").
+        if (bot.level().isDarkOutside() && !(this.kind == Kind.TRIAL_CHAMBER
+                && (net.joinedthegame.ai.goal.SleepGoal.deepUnderground(bot) || ShelterGoal.nightReady(bot)))) return 0;
         if (this.kind == null) {
             this.kind = pick(bot);
             if (this.kind == null) {
@@ -277,6 +311,7 @@ public final class ProjectGoal extends Goal {
                 case CANE -> new net.joinedthegame.ai.project.CaneProject();
                 case GARDEN -> new net.joinedthegame.ai.project.GardenProject();
                 case PATHS -> new net.joinedthegame.ai.project.PathsProject();
+                case BREW -> new net.joinedthegame.ai.project.BrewProject();
             };
         }
         Task.Status status = this.task.tick(bot, this.brain);

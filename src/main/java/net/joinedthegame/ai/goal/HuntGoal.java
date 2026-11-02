@@ -97,7 +97,7 @@ public final class HuntGoal extends Goal {
         long now = this.brain.now();
         this.unreachable.values().removeIf(until -> until < now);
         List<Animal> animals = Senses.entitiesNear(bot, Animal.class, 28,
-                a -> isMeatAnimal(a) && !this.unreachable.containsKey(a.getUUID()) && Senses.wouldNotice(bot, a));
+                a -> isMeatAnimal(a) && !this.unreachable.containsKey(a.getUUID()) && Senses.wouldNotice(bot, a) && !dangerousGround(bot, a));
         for (Animal a : animals) {
             if (desperate) return a;
             long sameKind = animals.stream().filter(o -> o.getType() == a.getType()).count();
@@ -328,4 +328,15 @@ public final class HuntGoal extends Goal {
         if (this.prey != null) return "Hunting";
         return this.roaming ? "Looking for food" : "Getting food";
     }
+    /**
+     * Not where we keep dying, and not by a pillager outpost (Cozmo went hunting by one again and
+     * again, and was shot down by crossbows five times in one night). Starving, anything goes.
+     */
+    private boolean dangerousGround(BotPlayer bot, Animal a) {
+        if (bot.getFoodData().getFoodLevel() <= 4) return false;
+        var at = net.minecraft.core.GlobalPos.of(bot.level().dimension(), a.blockPosition());
+        return this.brain.memory().nearest("death_hotspot", at, 16) != null
+                || this.brain.memory().nearest(net.joinedthegame.ai.Structures.Kind.PILLAGER_OUTPOST.placeKey(), at, 48) != null;
+    }
+
 }

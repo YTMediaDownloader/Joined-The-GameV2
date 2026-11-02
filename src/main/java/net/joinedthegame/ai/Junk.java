@@ -211,7 +211,10 @@ public final class Junk {
         int dropped = 0;
         for (int i = 0; i < Inv.MAIN_SLOTS; i++) {
             ItemStack stack = bot.getInventory().getItem(i);
-            if (stack.isEmpty() || Inv.tier(stack.getItem()) >= 4 || !Inv.isObsolete(bot, stack)) continue;
+            // Iron and better normally go home to the chests; full up with no home to take them to,
+            // outgrown gear goes (Redlantern was carrying his whole old iron set, bag at 36 of 36).
+            boolean noHome = brain.record().home() == null;
+            if (stack.isEmpty() || Inv.tier(stack.getItem()) >= 4 && !(noHome && Inv.usedSlots(bot) >= 28) || !Inv.isObsolete(bot, stack)) continue;
             bot.getInventory().setItem(i, ItemStack.EMPTY);
             throwAway(bot, stack);
             dropped++;
@@ -269,6 +272,10 @@ public final class Junk {
     public static void tossIfFull(BotPlayer bot, BotBrain brain) {
         if (Inv.usedSlots(bot) < 28) return;
         consolidate(bot);
+        // Odds and ends into bundles first: nothing gets thrown out that a bundle could carry.
+        Bundles.pack(bot);
+        Bundles.makeOneIfWorthIt(bot, brain);
+        Bundles.pack(bot);
         if (Inv.usedSlots(bot) < 28) return;
         boolean hoarder = brain.personality().hoarder() >= 0.6 && brain.record().home() != null;
         // At home with chests to put it in: nothing worth keeping gets thrown out, it gets put away.
@@ -326,5 +333,39 @@ public final class Junk {
             bot.getInventory().setChanged();
             brain.log("bag's full: threw out " + tossed + " stacks of odds and ends");
         }
+    }
+
+    /**
+     * Free one slot, right now, for something we're about to make: odds and ends into a bundle,
+     * then junk, then outgrown gear, then a spare duplicate (a second crafting table, a third
+     * furnace). False if there's really nothing to let go of.
+     */
+    public static boolean makeRoom(BotPlayer bot) {
+        var inv = bot.getInventory();
+        Bundles.pack(bot);
+        if (inv.getFreeSlot() >= 0) return true;
+        int pick = -1;
+        java.util.Map<Item, Integer> seen = new java.util.HashMap<>();
+        for (int pass = 0; pass < 3 && pick < 0; pass++) {
+            seen.clear();
+            for (int i = 0; i < Inv.MAIN_SLOTS && pick < 0; i++) {
+                ItemStack s = inv.getItem(i);
+                if (s.isEmpty() || isValuable(s)) continue;
+                if (pass == 0 && !isKeeper(s)) pick = i;
+                else if (pass == 1 && Inv.isObsolete(bot, s)) pick = i;
+                // A second slot of the same thing (two bows; furnaces and tables stack, so "three
+                // furnaces" is one slot and frees nothing), or a second stack of building blocks
+                // (the smaller one: a stack's plenty to carry).
+                else if (pass == 2 && !Inv.isFood(s) && seen.merge(s.getItem(), 1, Integer::sum) > 1) pick = i;
+                else if (pass == 2 && Inv.isPlaceableBlock(s) && !s.is(net.minecraft.tags.ItemTags.PLANKS) && !s.is(net.minecraft.tags.ItemTags.LOGS)
+                        && Inv.count(bot, x -> Inv.isPlaceableBlock(x) && !x.is(net.minecraft.tags.ItemTags.PLANKS) && !x.is(net.minecraft.tags.ItemTags.LOGS)) - s.getCount() >= 64) pick = i;
+            }
+        }
+        if (pick < 0) return false;
+        ItemStack out = inv.getItem(pick);
+        inv.setItem(pick, ItemStack.EMPTY);
+        throwAway(bot, out);
+        inv.setChanged();
+        return true;
     }
 }

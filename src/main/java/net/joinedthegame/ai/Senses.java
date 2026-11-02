@@ -92,7 +92,11 @@ public final class Senses {
 
     public static List<ItemEntity> itemsNear(BotPlayer bot, BlockPos center, double radius) {
         AABB box = new AABB(center).inflate(radius);
-        List<ItemEntity> items = bot.level().getEntitiesOfClass(ItemEntity.class, box, e -> e.isAlive() && !e.getItem().isEmpty());
+        // Not our own throw-outs (junk we tossed to make room: they can't be picked up for minutes,
+        // on purpose). Redlantern, his bag full, stood on his own junk after every ore he mined,
+        // waiting to pick up what couldn't be: "mines, sits there for five seconds, mines again".
+        List<ItemEntity> items = bot.level().getEntitiesOfClass(ItemEntity.class, box, e -> e.isAlive() && !e.getItem().isEmpty()
+                && !(e.hasPickUpDelay() && e.getOwner() == bot));
         items.sort(Comparator.comparingDouble(e -> e.distanceToSqr(bot)));
         return items;
     }

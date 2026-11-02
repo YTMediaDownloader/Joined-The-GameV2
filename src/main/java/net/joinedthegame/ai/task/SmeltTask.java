@@ -68,6 +68,14 @@ public final class SmeltTask implements Task {
                 BlockPos near = Senses.findBlock(bot, s -> s.is(Blocks.FURNACE), 24, 8, false, brain::isBlacklisted);
                 if (near != null) this.furnace = near;
             }
+            // Dug in for the night (and not geared for it): not one up near the surface. Going up to
+            // it, then back down when it's not safe, then up again, was LeBron's whole night. Set one
+            // up down here instead (we've cobble), or it waits for morning.
+            if (this.furnace != null && bot.level().isDarkOutside() && !net.joinedthegame.ai.goal.ShelterGoal.nightReady(bot)
+                    && (bot.level().canSeeSky(this.furnace.above()) || this.furnace.getY() > bot.getBlockY() + 1)
+                    && !BlockBreaker.canUse(bot, this.furnace)) {
+                this.furnace = null;
+            }
             if (this.furnace == null) {
                 if (Inv.count(bot, Items.FURNACE) == 0) {
                     // No furnace we can use: make one from the cobble we're carrying.
@@ -86,6 +94,7 @@ public final class SmeltTask implements Task {
                     brain.log("smelt: no furnace around and none to place");
                     return Status.FAILED;
                 }
+                if (brain.gettingOutOfWater(bot)) return Status.RUNNING; // not setting up in a pool
                 BlockPos spot = CraftTask.findPlacementSpot(bot);
                 if (spot == null || !Placer.place(bot, spot, s -> s.is(Items.FURNACE))) {
                     brain.log("smelt: couldn't place furnace at " + spot);

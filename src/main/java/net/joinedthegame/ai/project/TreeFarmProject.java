@@ -94,6 +94,9 @@ public final class TreeFarmProject implements Task {
     private List<Step> plan(BotPlayer bot, BlockPos home) {
         WorldView w = new WorldView(bot.level());
         int saplings = Inv.count(bot, s -> s.is(ItemTags.SAPLINGS));
+        // None to plant (the fetch from the chests came back empty): nothing to plan. (With none,
+        // "at least min(4, 0) good spots" let an empty spot list through, and the server crashed.)
+        if (saplings == 0) return List.of();
         for (int r = 10; r <= 24; r += 2) {
             for (int i = 0; i < 16; i++) {
                 double a = i * Math.PI / 8;

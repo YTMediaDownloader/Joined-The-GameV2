@@ -46,6 +46,8 @@ import org.jspecify.annotations.Nullable;
 public final class SettleGoal extends Goal {
     private enum Stage { CHOOSE, GATHER, BUILD, FURNISH, MOVE }
 
+    private boolean toldBedLater;
+
     private Stage stage = Stage.CHOOSE;
     private HousePlans.@Nullable Plan plan;
     private @Nullable Task task;
@@ -172,6 +174,11 @@ public final class SettleGoal extends Goal {
             case MOVE -> move(bot);
             case FURNISH -> {
                 if (farFromSite(bot)) yield true;
+                // Built without a bed (no wool at the time)? Get one now.
+                if (stillToPlace(bot, this.plan, new ItemStack(Items.BED.red())) > 0 && Inv.count(bot, st -> st.is(ItemTags.BEDS)) == 0) {
+                    this.stage = Stage.GATHER;
+                    yield true;
+                }
                 this.task = new BuildTask(this.plan.furnish(), "Moving in");
                 yield true;
             }
@@ -361,6 +368,10 @@ public final class SettleGoal extends Goal {
     // --- gathering ----------------------------------------------------------------------
 
     private boolean gather(BotPlayer bot) {
+        // Wandered a long way from the site (Cozmo was gathering three hundred blocks off it):
+        // back there first, and gather round it. (Not straight after choosing: the site's picked
+        // near us.)
+        if (this.plan != null && this.plan.room().distSqr(bot.blockPosition()) > 128 * 128 && farFromSite(bot)) return true;
         HousePlans.Plan plan = this.plan;
         if (++this.gatherRounds > 25 + plan.needs().size() * 8) return fail(bot, "couldn't get everything together");
         this.currentNeed = null;
@@ -418,12 +429,29 @@ public final class SettleGoal extends Goal {
                         new CollectItems(old.pos(), 4, 100));
                 return true;
             }
-            if (!WoolTask.hasEnough(bot)) {
-                this.task = new WoolTask();
-                return true;
+            if (!built && !WoolTask.hasEnough(bot)) {
+                // No wool yet: walls and roof first, the bed when it's time to move in (FURNISH sends
+                // us back here for it). Stopping the whole house to go after sheep that weren't there,
+                // then wandering off to mine while it waited, was "building my house, chopping wood,
+                // mining iron, building my house" over and over.
+                if (!this.toldBedLater) {
+                    this.toldBedLater = true;
+                    this.brain.log("no wool for a bed yet: building first, the bed when it's time to move in");
+                }
+            } else {
+                if (!WoolTask.hasEnough(bot)) {
+                    // Hunted for sheep lately and found none: give it a while before another go (on
+                    // with other things meanwhile; the house is up).
+                    if (!this.brain.woolHuntDue(bot)) {
+                        cooldown(this.brain.now(), 20 * 60);
+                        return false;
+                    }
+                    this.task = new WoolTask();
+                    return true;
+                }
+                DyeColor color = WoolTask.bestColor(bot);
+                return planFor(bot, WoolTask.bed(color), 1);
             }
-            DyeColor color = WoolTask.bestColor(bot);
-            return planFor(bot, WoolTask.bed(color), 1);
         }
         // Chests: one for stuff, one to hide.
         if (Inv.count(bot, Items.CHEST) < chestsNeeded) return planFor(bot, Items.CHEST, chestsNeeded);

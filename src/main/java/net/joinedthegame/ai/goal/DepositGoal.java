@@ -49,8 +49,19 @@ public final class DepositGoal extends Goal {
         return home.pos().distSqr(bot.blockPosition()) <= 48 * 48 ? home : null;
     }
 
+    private boolean inDanger;
+
     @Override
     public int priority(BotPlayer bot) {
+        // A "home" in a trial chamber (or the like) that we're about to move out of: nothing goes
+        // into its chests (it'd be putting back what we've just taken out).
+        GlobalPos h = this.brain.record().home();
+        if (h != null && h.dimension() == bot.level().dimension() && h.pos().distSqr(bot.blockPosition()) < 48 * 48) {
+            if (this.brain.now() % 20 == 0) this.inDanger = net.joinedthegame.ai.Structures.dangerousAt(bot, h.pos());
+            if (this.inDanger) return 0;
+        } else {
+            this.inDanger = false;
+        }
         GlobalPos home = homeHere(bot);
         if (home == null) {
             // Away from home with the bag full (a long mining trip): go home and unload, rather

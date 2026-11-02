@@ -63,8 +63,14 @@ public final class WoolTask implements Task {
 
     @Override
     public Status tick(BotPlayer bot, BotBrain brain) {
-        if (hasEnough(bot)) return Status.DONE;
-        if (++this.ticks > 20 * 120) return Status.FAILED;
+        if (hasEnough(bot)) {
+            brain.woolHunt(bot, true);
+            return Status.DONE;
+        }
+        if (++this.ticks > 20 * 120) {
+            brain.woolHunt(bot, false);
+            return Status.FAILED;
+        }
         // String from spiders: four make a wool, no sheep needed.
         if (Inv.count(bot, Items.STRING) >= 4 && this.ticks % 20 == 1) {
             var step = new net.joinedthegame.ai.Planner(bot, false).next(wool(DyeColor.WHITE), Inv.count(bot, wool(DyeColor.WHITE)) + 1);
@@ -141,6 +147,7 @@ public final class WoolTask implements Task {
             // Not there any more either: forget that spot.
             var here = net.minecraft.core.GlobalPos.of(bot.level().dimension(), bot.blockPosition());
             brain.memory().forgetAround("sheep", here, 32);
+            brain.woolHunt(bot, false);
             return Status.FAILED;
         }
         net.joinedthegame.ai.Roam.tick(bot, brain.navigator());

@@ -248,12 +248,29 @@ public final class JtgEvents {
             return;
         }
         if (!said.matches(".*\\b(peace|truce)\\b.*")) return;
-        // Calling it ourselves: to the bots fighting us, close by.
-        for (UUID id : net.joinedthegame.ai.social.Feuds.against(player.getUUID(), now)) {
+        // Calling it ourselves: to the bots fighting us, and to any close by with a quarrel to make
+        // up (a rival, one that can't stand us, one we've been hitting and running from). It used to
+        // go only to bots registered mid-fight, so a call between blows reached nobody, silently.
+        java.util.Set<UUID> to = new java.util.LinkedHashSet<>(net.joinedthegame.ai.social.Feuds.against(player.getUUID(), now));
+        BotManager mgr = BotManager.get(player.level().getServer());
+        for (var other : player.level().players()) {
+            if (!(other instanceof BotPlayer bot) || bot.distanceToSqr(player) > 24 * 24) continue;
+            BotBrain b = mgr.brain(bot.getUUID());
+            if (b == null) continue;
+            var r = b.knownRelation(player.getUUID());
+            if (player.getUUID().equals(b.feudOpponent()) || b.unsettledRounds(player.getUUID()) > 0
+                    || r != null && (r.rivalSince > 0 || r.liking <= -30)) to.add(bot.getUUID());
+        }
+        java.util.List<String> names = new java.util.ArrayList<>();
+        for (UUID id : to) {
             if (player.level().getPlayerByUUID(id) instanceof BotPlayer bot && bot.distanceToSqr(player) < 32 * 32) {
                 net.joinedthegame.ai.social.Peace.offer(player.getUUID(), player.getGameProfile().name(), id, now);
+                names.add(bot.getScoreboardName());
             }
         }
+        if (net.joinedthegame.DebugLog.on()) net.joinedthegame.DebugLog.write("[peace] " + player.getGameProfile().name() + " called peace: "
+                + (names.isEmpty() ? "nobody nearby to make peace with" : "offered to " + String.join(", ", names)));
+        if (names.isEmpty()) player.sendOverlayMessage(Component.literal("No one nearby has a quarrel with you to make peace over."));
     }
 
     @SubscribeEvent

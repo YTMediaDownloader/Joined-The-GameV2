@@ -33,7 +33,13 @@ public final class RecoverGoal extends Goal {
         if (death.dimension() != bot.level().dimension()) return 0;
         // Not in the dark without armour: that's how it died in the first place. Morning.
         long age = this.brain.now() - this.brain.deathTime();
-        if (bot.level().isDarkOutside() && !ShelterGoal.nightReady(bot)) {
+        // The last two minutes before it all vanishes: worth the risk, night or guard or not.
+        // (Waiting it out lost bots their whole kit: Redlantern's full diamond, over a skeleton.)
+        boolean lastChance = age > GIVE_UP_TICKS - 20 * 120;
+        // Night's only a reason to wait if the stuff's out under the sky: down a mine it's dark
+        // anyway, and a respawned bot (no armour) was never "ready for the night", so never went.
+        boolean outInTheOpen = bot.level().isLoaded(death.pos()) && bot.level().canSeeSky(death.pos().above());
+        if (bot.level().isDarkOutside() && !ShelterGoal.nightReady(bot) && outInTheOpen && !lastChance) {
             if (age <= GIVE_UP_TICKS) this.brain.aside("leaving my stuff till morning");
             return 0;
         }
@@ -45,7 +51,7 @@ public final class RecoverGoal extends Goal {
         // Something that shoots still hanging about where we died (a skeleton in the shade of a
         // ravine, say): walking straight back gets us shot again, and again. Give it a chance to
         // wander off, unless the stuff's about to vanish anyway (the last minute: worth the risk).
-        if (age < GIVE_UP_TICKS - 20 * 60) {
+        if (!lastChance) {
             String guard = guarded(bot, death);
             if (guard != null) {
                 this.brain.aside("my stuff's guarded by " + guard);
@@ -72,7 +78,9 @@ public final class RecoverGoal extends Goal {
         int close = 0;
         net.minecraft.world.entity.Mob near = null;
         for (var m : mobs) {
-            if (m.isHolding(net.minecraft.world.item.Items.BOW) || m.isHolding(net.minecraft.world.item.Items.CROSSBOW)) return name(m);
+            // An archer only guards it if it can actually see it (a skeleton the other side of a
+            // cave wall isn't guarding anything: there's one of those in every cave).
+            if ((m.isHolding(net.minecraft.world.item.Items.BOW) || m.isHolding(net.minecraft.world.item.Items.CROSSBOW)) && sees(m, death)) return name(m);
             if (m.distanceToSqr(net.minecraft.world.phys.Vec3.atCenterOf(death.pos())) < 10 * 10) {
                 close++;
                 near = m;
@@ -82,6 +90,12 @@ public final class RecoverGoal extends Goal {
         if (close >= 2) return close + " monsters";
         if (near != null && gear > 0.6) return name(near);
         return null;
+    }
+
+    private static boolean sees(net.minecraft.world.entity.Mob m, GlobalPos spot) {
+        var hit = m.level().clip(new net.minecraft.world.level.ClipContext(m.getEyePosition(), net.minecraft.world.phys.Vec3.atCenterOf(spot.pos()),
+                net.minecraft.world.level.ClipContext.Block.COLLIDER, net.minecraft.world.level.ClipContext.Fluid.NONE, m));
+        return hit.getType() == net.minecraft.world.phys.HitResult.Type.MISS || hit.getBlockPos().equals(spot.pos());
     }
 
     private static String name(net.minecraft.world.entity.Mob m) {

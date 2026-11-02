@@ -48,6 +48,7 @@ public final class Activities {
             case CANE -> n.pull(Need.KNOWLEDGE, p) * 0.5 + n.pull(Need.COMFORT, p) * 0.3 + n.pull(Need.CREATIVITY, p) * 0.2;
             case GARDEN -> n.pull(Need.CREATIVITY, p) * 0.8 + n.pull(Need.COMFORT, p) * 0.4 + n.pull(Need.HOME, p) * 0.2;
             case PATHS -> n.pull(Need.CREATIVITY, p) * 0.6 + n.pull(Need.HOME, p) * 0.3 + n.pull(Need.COMFORT, p) * 0.2;
+            case BREW -> n.pull(Need.KNOWLEDGE, p) * 0.7 + n.pull(Need.GEAR, p) * 0.6 + n.pull(Need.ADVENTURE, p) * 0.2;
         };
     }
 

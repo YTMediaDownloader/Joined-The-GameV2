@@ -89,7 +89,13 @@ public final class PickupGoal extends Goal {
         // Stick with the item we're already going for (switching mid-way just wastes the trip).
         ItemEntity current = this.target;
         if (current != null && wanted(bot, current) && current.distanceToSqr(bot) <= 10 * 10) return 48;
-        List<ItemEntity> items = Senses.entitiesNear(bot, ItemEntity.class, 8, e -> wanted(bot, e));
+        // Not something that's just this second dropped right by us (the block we just mined, the log
+        // we just chopped): the job we're on picks those up itself, or we walk over them. Taking over
+        // for it was a flicker every few seconds: "Mining iron", "Picking up items", "Mining iron".
+        // Still lying there after a few seconds, it's ours to go and get.
+        boolean busy = this.brain.currentGoal() != null && this.brain.currentGoal() != this;
+        List<ItemEntity> items = Senses.entitiesNear(bot, ItemEntity.class, 8, e -> wanted(bot, e)
+                && !(busy && e.getAge() < 60 && e.distanceToSqr(bot) < 4 * 4));
         if (items.isEmpty()) {
             this.target = null;
             return 0;

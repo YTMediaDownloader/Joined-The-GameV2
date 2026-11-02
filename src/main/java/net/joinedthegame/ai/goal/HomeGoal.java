@@ -43,12 +43,43 @@ public final class HomeGoal extends Goal {
         super(brain);
     }
 
+    private @Nullable BlockPos movingOut;
+    private boolean inDangerousPlace;
+    private @Nullable Task moveOutTask;
+    private boolean tookThingsBack;
+
+    /** Done here: not our home any more (and not one to come back to). */
+    private void moveOut(BotPlayer bot, BlockPos bed) {
+        this.movingOut = null;
+        this.moveOutTask = null;
+        this.tookThingsBack = true;
+        this.brain.log("moved out of the bed at " + bed.toShortString() + ": not living somewhere like that");
+        BotManager.get(bot.level().getServer()).setHome(this.brain.record(), null);
+        this.brain.blacklist(bed);
+    }
+
     private boolean hasHome(BotPlayer bot) {
         GlobalPos home = this.brain.record().home();
         if (home == null) return false;
         if (home.dimension() != bot.level().dimension()) return true; // can't check from here
         if (!bot.level().isLoaded(home.pos())) return true;
-        if (bot.level().getBlockState(home.pos()).is(BlockTags.BEDS)) return true;
+        if (bot.level().getBlockState(home.pos()).is(BlockTags.BEDS)) {
+            // Living in a trial chamber (or some such)? Not a home: move out, find somewhere proper.
+            if (home.pos().distSqr(bot.blockPosition()) < 48 * 48 && net.joinedthegame.ai.Structures.dangerousAt(bot, home.pos())) {
+                // Our things in the chests here first (Redlantern had put his whole bag in one):
+                // take back what we can carry, then go.
+                if (this.movingOut == null && !this.tookThingsBack
+                        && net.joinedthegame.ai.task.FetchTask.stored(bot, this.brain, st -> !st.isEmpty()) > 0) {
+                    this.movingOut = home.pos();
+                    this.brain.log("my bed's in the middle of a dangerous place: taking my things out of the chest, then moving out");
+                    return true;
+                }
+                if (this.movingOut != null) return true; // still at it
+                moveOut(bot, home.pos());
+                return false;
+            }
+            return true;
+        }
         // The bed is gone (broken, or taken back): homeless again.
         BotManager.get(bot.level().getServer()).setHome(this.brain.record(), null);
         return false;
@@ -58,9 +89,14 @@ public final class HomeGoal extends Goal {
     public int priority(BotPlayer bot) {
         // Mid-move (old bed packed up, new house not built yet): don't grab another bed.
         if (this.brain.settling()) return 0;
+        if (this.movingOut != null) return 52; // packing up to leave: see it through
         if (hasHome(bot)) return 0;
         // Get basic tools first; nobody house-hunts with bare hands.
         if (Inv.pickaxeTier(bot) < 1) return 0;
+        // Not while we're in the middle of a trial chamber (or the like): we'd dig a hole in its wall
+        // and call it home (Redlantern did, moments after moving out of its bedroom). Later, out of it.
+        if (this.brain.now() % 20 == 0) this.inDangerousPlace = net.joinedthegame.ai.Structures.dangerousAt(bot, bot.blockPosition());
+        if (this.inDangerousPlace) return 0;
         // A nomad carries its bed and puts it down wherever it is at night: no home to make.
         if (this.brain.roaming(bot) && Inv.count(bot, s -> s.is(ItemTags.BEDS)) > 0) return 0;
         // Night, and not geared for it: no house-hunting on the surface. It used to climb out of
@@ -86,6 +122,31 @@ public final class HomeGoal extends Goal {
 
     @Override
     public boolean tick(BotPlayer bot) {
+        if (this.movingOut != null) {
+            // Taking our things back out of the chests before moving out.
+            if (this.moveOutTask == null) {
+                // Treasure first (discs, books, gold: whatever happens to be in which slot), then the
+                // useful stuff; the cobble and dirt can stay. A full bag takes the best of it, not
+                // whatever's in the top row.
+                java.util.List<Task> steps = new java.util.ArrayList<>();
+                Task treasure = net.joinedthegame.ai.task.FetchTask.from(bot, this.brain, net.joinedthegame.ai.Junk::isValuable, 36 * 64, "Taking my treasure back");
+                Task useful = net.joinedthegame.ai.task.FetchTask.from(bot, this.brain,
+                        st -> net.joinedthegame.ai.Junk.isKeeper(st) && !net.joinedthegame.ai.Junk.isValuable(st), 36 * 64, "Taking my things back");
+                if (treasure != null) steps.add(treasure);
+                if (useful != null) steps.add(useful);
+                this.moveOutTask = steps.isEmpty() ? null : net.joinedthegame.ai.task.Tasks.sequence(steps.toArray(new Task[0]));
+                if (this.moveOutTask == null) {
+                    moveOut(bot, this.movingOut);
+                    return false;
+                }
+            }
+            Task.Status status = this.moveOutTask.tick(bot, this.brain);
+            if (status == Task.Status.RUNNING) return true;
+            this.moveOutTask.stop(bot, this.brain);
+            this.brain.log("took what I could carry back out of the chest");
+            moveOut(bot, this.movingOut);
+            return false;
+        }
         if (hasHome(bot)) return false;
         if (++this.ticks > 20 * 60 * 5) {
             cooldown(this.brain.now(), 20 * 120);
@@ -125,7 +186,8 @@ public final class HomeGoal extends Goal {
     private boolean decide(BotPlayer bot) {
         // 1. A free bed nearby: take it.
         BlockPos bed = Homes.findFreeBed(bot.level(), bot.blockPosition(), SEARCH_RADIUS, p -> this.brain.isBlacklisted(p)
-                || this.brain.memory().nearest("exs_house", net.minecraft.core.GlobalPos.of(bot.level().dimension(), p), 12) != null);
+                || this.brain.memory().nearest("exs_house", net.minecraft.core.GlobalPos.of(bot.level().dimension(), p), 12) != null
+                || net.joinedthegame.ai.Structures.dangerousAt(bot, p));
         if (bed != null) {
             this.claiming = bed;
             this.brain.log("going to claim the bed at " + bed.toShortString());
@@ -168,7 +230,11 @@ public final class HomeGoal extends Goal {
             }
             return true;
         }
-        // 4. Go get wool.
+        // 4. Go get wool (unless we've looked lately and there were none: later).
+        if (!this.brain.woolHuntDue(bot)) {
+            cooldown(this.brain.now(), 20 * 60);
+            return false;
+        }
         this.task = new WoolTask();
         return true;
     }

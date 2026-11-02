@@ -19,6 +19,7 @@
   "joinedthegame.screen.banned": "Banned",
 
   "container.joinedthegame.bot_inventory": "%s's inventory",
+  "container.joinedthegame.bot_inventory_view": "%s's inventory (look only)",
 
   "joinedthegame.msg.invited": "Invited %s",
   "joinedthegame.msg.kicked": "Kicked %s",

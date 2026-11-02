@@ -19,34 +19,39 @@ import net.minecraft.world.item.Items;
  *   row 4     hotbar
  *   row 5     helmet, chestplate, leggings, boots, offhand, then 4 locked slots
  * </pre>
+ * Without cheats it's look-only: in a survival world you can see what a bot's carrying, but
+ * you can't help yourself to it (or slip things in). Toss them things instead, like with anyone.
  */
 public final class BotInventoryMenu extends ChestMenu {
     private static final int SIZE = 45;
     private static final int FIRST_LOCKED = 41;
 
     private final BotPlayer bot;
+    private final boolean readOnly;
 
-    private BotInventoryMenu(int id, Inventory viewer, BotPlayer bot) {
+    private BotInventoryMenu(int id, Inventory viewer, BotPlayer bot, boolean readOnly) {
         super(MenuType.GENERIC_9x5, id, viewer, new View(bot), 5);
         this.bot = bot;
-        // Row 5: armor slots only take armor; the filler slots take nothing.
-        for (int i = 36; i < SIZE; i++) {
+        this.readOnly = readOnly;
+        // Row 5: armor slots only take armor; the filler slots take nothing. Look-only: nothing
+        // anywhere on the bot's side can be taken or placed.
+        for (int i = 0; i < SIZE; i++) {
             Slot old = this.slots.get(i);
             int chestSlot = i;
             Slot replacement = new Slot(old.container, old.getContainerSlot(), old.x, old.y) {
                 @Override
                 public boolean mayPlace(ItemStack stack) {
-                    return View.accepts(chestSlot, stack);
+                    return !readOnly && View.accepts(chestSlot, stack);
                 }
 
                 @Override
                 public boolean mayPickup(Player player) {
-                    return chestSlot < FIRST_LOCKED;
+                    return !readOnly && chestSlot < FIRST_LOCKED;
                 }
 
                 @Override
                 public int getMaxStackSize() {
-                    return chestSlot < 40 ? 1 : super.getMaxStackSize();
+                    return chestSlot >= 36 && chestSlot < 40 ? 1 : super.getMaxStackSize();
                 }
             };
             replacement.index = i;
@@ -54,9 +59,29 @@ public final class BotInventoryMenu extends ChestMenu {
         }
     }
 
-    public static SimpleMenuProvider provider(BotPlayer bot) {
-        return new SimpleMenuProvider((id, inv, player) -> new BotInventoryMenu(id, inv, bot),
-                Component.translatable("container.joinedthegame.bot_inventory", bot.getName()));
+    public static SimpleMenuProvider provider(BotPlayer bot, boolean readOnly) {
+        return new SimpleMenuProvider((id, inv, player) -> new BotInventoryMenu(id, inv, bot, readOnly),
+                Component.translatable(readOnly ? "container.joinedthegame.bot_inventory_view" : "container.joinedthegame.bot_inventory", bot.getName()));
+    }
+
+    /** Cheats on (op, or a singleplayer world with cheats allowed) or creative: hands in. */
+    public static boolean mayEdit(net.minecraft.server.level.ServerPlayer viewer) {
+        return viewer.isCreative() || viewer.permissions().hasPermission(net.minecraft.server.permissions.Permissions.COMMANDS_GAMEMASTER);
+    }
+
+    @Override
+    public void clicked(int slot, int button, net.minecraft.world.inventory.ContainerInput type, Player player) {
+        // Look-only: no clicks on the bot's side at all (number-key swaps and drops included),
+        // and no shift-clicking or gathering from your own side that would reach into it.
+        if (this.readOnly && (slot >= 0 && slot < SIZE
+                || type == net.minecraft.world.inventory.ContainerInput.QUICK_MOVE
+                || type == net.minecraft.world.inventory.ContainerInput.PICKUP_ALL)) return;
+        super.clicked(slot, button, type, player);
+    }
+
+    @Override
+    public boolean canDragTo(Slot slot) {
+        return !(this.readOnly && slot.index < SIZE) && super.canDragTo(slot);
     }
 
     @Override
@@ -66,7 +91,7 @@ public final class BotInventoryMenu extends ChestMenu {
 
     @Override
     public ItemStack quickMoveStack(Player player, int index) {
-        if (index >= FIRST_LOCKED && index < SIZE) return ItemStack.EMPTY;
+        if (this.readOnly || index >= FIRST_LOCKED && index < SIZE) return ItemStack.EMPTY;
         return super.quickMoveStack(player, index);
     }
 

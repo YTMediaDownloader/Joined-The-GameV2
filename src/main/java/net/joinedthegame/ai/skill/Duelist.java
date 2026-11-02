@@ -23,6 +23,11 @@ import net.minecraft.world.phys.Vec3;
  *   <li>Shield up while our swing recharges and they're close and ready to hit (an axe can knock
  *       it out of our hands: that's the game's rule, not ours).</li>
  *   <li>A bow and arrows and they're some way off: shoot, strafing between shots.</li>
+ *   <li>Their shield up: an axe knocks it out of their hands (five seconds without it), so out
+ *       comes the axe for that one hit. No axe: don't hit the shield, get round the side of it.</li>
+ *   <li>A mace coming down on us (they're in the air above us with one): shield up facing it
+ *       (shields take a smash), or get out from under it.</li>
+ *   <li>Potions: strength going in, healing when it's going badly.</li>
  * </ul>
  */
 public final class Duelist {
@@ -43,10 +48,82 @@ public final class Duelist {
         ++this.ticks;
         double dist = Math.sqrt(them.distanceToSqr(bot));
         this.brain.controls().lookAt(bot, them.getBoundingBox().getCenter());
+        // Half way through a potion: keep our distance till it's down.
+        if (net.joinedthegame.ai.Potions.drinking(bot)) {
+            this.brain.navigator().stop(bot);
+            if (dist < 4) this.brain.controls().forward = -1f;
+            this.brain.controls().strafe = this.weave % 2 == 0 ? 0.5f : -0.5f;
+            return true;
+        }
+        if (net.joinedthegame.ai.Potions.fight(bot, this.brain, dist, them instanceof Player ? 3.5 : 2.0, false)) return true;
+        if (dodgeSmash(bot, this.brain, them)) return true;
         if (dist > 7 && dist < 30 && rangedSlot(bot) >= 0 && bot.hasLineOfSight(them)) return shoot(bot, them, dist);
         stopDrawing(bot);
-        if (Inv.bestWeapon(bot) >= 0) Inv.hold(bot, Inv.bestWeapon(bot));
+        int axe = Inv.find(bot, s -> s.is(net.minecraft.tags.ItemTags.AXES));
+        if (this.axeOut && axe >= 0) Inv.hold(bot, axe);
+        else if (Inv.bestWeapon(bot) >= 0) Inv.hold(bot, Inv.bestWeapon(bot));
         return melee(bot, them, dist);
+    }
+
+    // --- shields and maces ------------------------------------------------------------
+
+    /** The axe is out for knocking their shield away (until that hit lands). */
+    private boolean axeOut;
+    private long toldSmashAt = -1000;
+
+    /** Their shield's up and pointing at us (it only covers the front). */
+    static boolean blockingUs(LivingEntity them, BotPlayer bot) {
+        // Up, or on its way up (a shield takes a quarter second to start blocking: a player sees
+        // it coming up, and so do we).
+        boolean raising = them.isUsingItem() && them.getUseItem().is(Items.SHIELD);
+        if (!them.isBlocking() && !raising) return false;
+        Vec3 toUs = bot.position().subtract(them.position()).multiply(1, 0, 1);
+        if (toUs.lengthSqr() < 0.01) return true;
+        return them.getViewVector(1f).multiply(1, 0, 1).normalize().dot(toUs.normalize()) > 0;
+    }
+
+    /**
+     * Someone in the air above us with a mace: a smash is on its way down (26.3: more than 1.5
+     * blocks of fall when the hit lands, and the damage climbs fast with the height). A shield
+     * takes it (smashes don't get past shields), so: shield up, facing them. No shield: get out
+     * from under them, sideways, sprinting. True while we're dealing with it.
+     */
+    public static boolean dodgeSmash(BotPlayer bot, BotBrain brain, LivingEntity them) {
+        if (!them.getMainHandItem().is(Items.MACE) || them.onGround() || them.isFallFlying()) return false;
+        double up = them.getY() - bot.getY();
+        double flat = Math.hypot(them.getX() - bot.getX(), them.getZ() - bot.getZ());
+        if (up < 1.5 || flat > 6) return false;
+        brain.navigator().stop(bot);
+        brain.controls().lookAt(bot, them.getBoundingBox().getCenter());
+        boolean shield = bot.getOffhandItem().is(Items.SHIELD);
+        if (brain.now() - lastToldSmash(brain) > 40) {
+            brain.log((them instanceof Player p ? p.getGameProfile().name() : "they") + "'s coming down with a mace: "
+                    + (shield ? "shield up" : "getting out from under"));
+            SMASH_TOLD.put(brain, brain.now());
+        }
+        if (shield) {
+            brain.holdShield(10);
+            if (!(bot.isUsingItem() && bot.getUsedItemHand() == InteractionHand.OFF_HAND)) {
+                bot.gameMode.useItem(bot, bot.level(), bot.getOffhandItem(), InteractionHand.OFF_HAND);
+            }
+            brain.controls().blocking = true;
+            return true;
+        }
+        // Sideways, away from where they'll land (the smash knocks everyone within 3.5 back too).
+        Vec3 away = bot.position().subtract(them.position()).multiply(1, 0, 1);
+        if (away.lengthSqr() < 0.01) away = new Vec3(1, 0, 0);
+        away = away.normalize();
+        brain.controls().faceTowards(bot, bot.position().add(away.add(new Vec3(-away.z, 0, away.x)).scale(4)));
+        brain.controls().forward = 1f;
+        brain.controls().sprint = bot.getFoodData().getFoodLevel() > 6;
+        if (bot.horizontalCollision && bot.onGround()) brain.controls().jump = true;
+        return true;
+    }
+
+    private static final java.util.Map<BotBrain, Long> SMASH_TOLD = new java.util.WeakHashMap<>();
+
+    private static long lastToldSmash(BotBrain brain) {
+        return SMASH_TOLD.getOrDefault(brain, -1000L);
     }
 
     private boolean melee(BotPlayer bot, LivingEntity them, double dist) {
@@ -103,6 +180,22 @@ public final class Duelist {
             return true;
         }
         this.outOfReach = 0;
+        // Their shield's up at us. An axe knocks it out of their hands: get it out (swapping
+        // resets the swing, so it's ready by the time we are). No axe: hitting the shield does
+        // nothing, so circle round to the side it doesn't cover.
+        if (blockingUs(them, bot)) {
+            if (!this.axeOut && Inv.find(bot, s -> s.is(net.minecraft.tags.ItemTags.AXES)) >= 0) {
+                this.axeOut = true;
+                this.brain.log("their shield's up: axe out");
+                return true;
+            }
+            if (!this.axeOut) {
+                this.brain.controls().strafe = this.weave % 2 == 0 ? 0.9f : -0.9f;
+                this.brain.controls().forward = dist > 2.2 ? 0.4f : 0f;
+                if (this.ticks % 60 == 0) this.weave++;
+                return true;
+            }
+        }
         if (charge < 0.9f) {
             // Just out of their reach until we're ready, side-stepping.
             this.brain.controls().forward = dist < 2.6 ? -0.6f : 0f;
@@ -120,7 +213,18 @@ public final class Duelist {
         boolean falling = !bot.onGround() && bot.getDeltaMovement().y < 0;
         boolean landed = this.jumpedForCrit && bot.onGround();
         if ((falling || !canJump || landed) && bot.hasLineOfSight(them)) {
+            // The shield-breaker: on the ground, no crit needed (a crit doesn't matter to it).
+            boolean axeHit = this.axeOut;
+            this.axeOut = false;
+            ItemStack blockingWith = axeHit ? them.getItemBlockingWith() : null;
             bot.attack(them);
+            if (blockingWith != null) {
+                // Did it actually knock the shield away? The game decides that inside the hit
+                // (BlocksAttacks.disable): a player's shield goes on cooldown, anyone else just
+                // stops blocking. Only say so if it did.
+                boolean disabled = them instanceof Player p ? p.getCooldowns().isOnCooldown(blockingWith) : !them.isBlocking();
+                this.brain.log(disabled ? "knocked their shield away" : "hit their raised shield with the axe");
+            }
             bot.swing(InteractionHand.MAIN_HAND, SwingAnimation.DEFAULT, false);
             bot.resetLastActionTime();
             this.jumpedForCrit = false;
@@ -225,6 +329,7 @@ public final class Duelist {
     }
 
     public void stop(BotPlayer bot) {
+        this.axeOut = false;
         stopDrawing(bot);
         lowerShield(bot);
         if (this.siege != null) this.brain.breaker().cancel(bot);

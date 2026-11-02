@@ -42,8 +42,14 @@ public final class FurnaceGoal extends Goal {
             this.lastLook = this.brain.now();
             this.furnace = find(bot);
         }
+        if (this.furnace == null) return 0;
+        // Dug in for the night and not geared for it: only if it's in reach from right here. The
+        // cooked food will keep till morning; stepping out of the hole for it won't (bots popped out
+        // and back in, again and again: "Digging in", "Emptying a furnace", "Digging in").
+        if (bot.level().isDarkOutside() && !ShelterGoal.nightReady(bot)
+                && !net.joinedthegame.ai.skill.BlockBreaker.canUse(bot, this.furnace)) return 0;
         // Above everyday gearing up (max 40), so food doesn't sit in a furnace forever.
-        return this.furnace == null ? 0 : 46;
+        return 46;
     }
 
     /** A furnace of ours nearby with something to collect. */

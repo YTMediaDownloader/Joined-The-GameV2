@@ -31,9 +31,10 @@ public final class GuideBook {
             {"Projects", "Geared-up bots find things to do besides mining:\n\n- Build a proper cabin and move in\n- Plant a fenced wheat farm (and keep it harvested)\n- Tame a wolf with bones\n- Plant flowers and put torches round the house"},
             {"Secret stash", "Settled bots bury a chest under their floor for diamonds, emeralds and gold.\n\nThe chests by the bed get everything else they have too much of. They remember what's in them, come home to unload after a long trip, and fetch from them before going out for more."},
             {"Enchanting", "With a diamond pickaxe, bots make an enchanting table (diamonds, obsidian, a book) and set up a room for it with space for 15 bookshelves.\n\nThey enchant with 30 levels. Each has favourite enchantments; a roll it doesn't want goes through the grindstone."},
-            {"Fighting", "Bots crit, step back between hits and weave toward skeletons.\n\nAfter their first iron they craft a shield and block arrows and creeper blasts.\n\nLosing? They run, or pillar up if cornered."},
+            {"Fighting", "Bots crit, step back between hits, block with a shield and go for the most dangerous mob first.\n\nA crowd? They back into a gap so it comes one at a time, and sweep.\n\nAgainst people: an axe for a raised shield, a shield for a falling mace. Losing? They run, dig in or pillar up."},
+            {"Brewing", "Blaze rods make a brewing stand; nether wart comes from fortresses (and a patch at home).\n\nBots brew healing, strength, fire resistance, regeneration, swiftness and more, and drink them: healing when losing, strength for a hard fight, fire resistance before a fortress."},
             {"Dying", "A bot that dies runs back to grab its stuff, if it can make it in 5 minutes.\n\nThree deaths in a row and it gives up and starts fresh."},
-            {"Admin tools", "From the list you can:\n- Teleport a bot to you\n- Open its inventory to give or take gear\n- Kick it (invite it back any time)\n- Ban it\n\nOn servers this needs operator."},
+            {"Admin tools", "From the list you can:\n- Teleport a bot to you\n- Open its inventory (give or take gear with cheats on; look only without)\n- Kick it (invite it back any time)\n- Ban it\n\nOn servers this needs operator."},
     };
 
     public static ItemStack create() {

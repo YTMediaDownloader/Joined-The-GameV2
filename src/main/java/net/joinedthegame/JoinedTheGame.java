@@ -20,6 +20,7 @@ public class JoinedTheGame {
     public JoinedTheGame(IEventBus modBus, ModContainer container) {
         modBus.addListener(JtgNetwork::register);
         JtgAttachments.TYPES.register(modBus);
+        JtgTickets.TYPES.register(modBus);
         container.registerConfig(ModConfig.Type.SYNCED, JtgConfig.SPEC);
     }
 

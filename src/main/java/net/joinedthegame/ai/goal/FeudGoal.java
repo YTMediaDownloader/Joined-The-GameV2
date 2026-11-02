@@ -87,6 +87,7 @@ public final class FeudGoal extends Goal {
             if (this.mode == Mode.HUNT) return 58;      // a spell of hunting: above chores, below everything urgent
             return this.why == Feuds.Why.VENGEANCE ? 84 : 80;
         }
+        answerCalmPeace(bot);
         if (!JtgConfig.RIVALRIES.get()) return 0;
         return trigger(bot) ? (this.why == Feuds.Why.VENGEANCE ? 84 : 80) : 0;
     }
@@ -102,7 +103,8 @@ public final class FeudGoal extends Goal {
             ServerPlayer p = server.getPlayerList().getPlayer(hitBy);
             Relation r = this.brain.knownRelation(hitBy);
             if (p != null && p.isAlive() && p.level() == bot.level() && p.distanceToSqr(bot) < 16 * 16 && allowedAgainst(p)
-                    && !(r != null && r.liking >= 60)) {
+                    && !(r != null && r.liking >= 60 && this.brain.hitsFrom(hitBy, 20 * 6) < 3)) {
+                // (A close friend lets a hit or two go; three in a few seconds isn't a joke.)
                 begin(bot, p, Feuds.Why.SELF_DEFENCE, outmatched(bot, p) ? Mode.RETREAT : Mode.FIGHT);
                 return true;
             }
@@ -202,6 +204,34 @@ public final class FeudGoal extends Goal {
                 tell(p, bot, Feelings.Act.JUMPED_ME); // they'll remember who joined in
                 return true;
             }
+        }
+        return false;
+    }
+
+    /**
+     * Teamwork: a close friend (or partner) nearby, badly hurt in a fight of their own. If we're
+     * doing fine in ours, theirs is the one that matters now: go for whoever's on them (two on
+     * one finishes it, and takes the heat off them). Allies used to just not hit each other.
+     */
+    private boolean coverAlly(BotPlayer bot, ServerPlayer current) {
+        if (bot.getHealth() < bot.getMaxHealth() * 0.5f) return false; // we're the one in trouble
+        var server = bot.level().getServer();
+        if (server == null) return false;
+        for (var other : bot.level().players()) {
+            if (!(other instanceof BotPlayer friend) || friend == bot || friend.distanceToSqr(bot) > 16 * 16) continue;
+            if (friend.getHealth() > friend.getMaxHealth() * 0.4f) continue;
+            Relation f = this.brain.knownRelation(friend.getUUID());
+            if (f == null || f.liking < 60 && f.partnerSince <= 0) continue;
+            Feuds.Fight fight = Feuds.of(friend.getUUID(), this.brain.now());
+            if (fight == null || fight.opponent().equals(current.getUUID()) || fight.opponent().equals(bot.getUUID())) continue;
+            Relation them = this.brain.knownRelation(fight.opponent());
+            if (them != null && them.liking >= 10) continue;
+            ServerPlayer p = server.getPlayerList().getPlayer(fight.opponent());
+            if (p == null || !p.isAlive() || p.level() != bot.level() || p.distanceToSqr(bot) > 20 * 20 || !allowedAgainst(p)) continue;
+            this.brain.log(friend.getScoreboardName() + "'s in trouble with " + p.getGameProfile().name() + ": going for them instead");
+            begin(bot, p, Feuds.Why.HELPING_FRIEND, Mode.FIGHT);
+            tell(p, bot, Feelings.Act.JUMPED_ME);
+            return true;
         }
         return false;
     }
@@ -332,6 +362,7 @@ public final class FeudGoal extends Goal {
 
         // Every couple of seconds: how's it going?
         if (m == Mode.FIGHT && this.ticks % 40 == 0) assess(bot, them, hatred);
+        if (m == Mode.FIGHT && this.ticks % 40 == 20 && coverAlly(bot, them)) return true;
         if (this.mode == Mode.RETREAT) return retreatTick(bot, them, dist);
         // Called peace and waiting on the answer: back off, shield up (still defending, not attacking).
         if (Peace.waitingOn(bot.getUUID(), now)) {
@@ -390,6 +421,46 @@ public final class FeudGoal extends Goal {
                 this.oppName, grudge, forgiving, winning, Math.clamp(chance, 0.03, 0.9) * 100, roll * 100));
         return roll < Math.clamp(chance, 0.03, 0.9);
     }
+
+    /**
+     * A peace call when we're not mid-fight (a player who'd been hitting us, a rival out of the
+     * blue): it used to go unanswered. Decided like one in a fight, minus the heat of the moment:
+     * the grudge and the temper decide. Never with someone who killed our pet.
+     */
+    private void answerCalmPeace(BotPlayer bot) {
+        long now = this.brain.now();
+        Peace.Offer offer = Peace.offerTo(bot.getUUID(), now);
+        if (offer == null || this.opp != null) {
+            if (offer == null) this.calmAnswerAt = -1;
+            return;
+        }
+        if (this.calmAnswerAt < 0) {
+            this.calmAnswerAt = now + 20 + bot.getRandom().nextInt(30); // a moment to think
+            return;
+        }
+        if (now < this.calmAnswerAt) return;
+        this.calmAnswerAt = -1;
+        var server = bot.level().getServer();
+        ServerPlayer them = server == null ? null : server.getPlayerList().getPlayer(offer.from());
+        if (them == null) return;
+        Relation r = this.brain.relation(offer.from(), offer.fromName(), !(them instanceof BotPlayer));
+        double forgiving = Feelings.forgiving(this.brain.personality());
+        double grudge = Math.clamp(-(r.lasting * 0.75 + r.liking * 0.25) / 100.0, 0, 1);
+        double chance = r.wick ? 0 : Math.clamp(0.55 + forgiving * 0.4 - grudge * 0.6 - (r.trust < 10 ? 0.15 : 0), 0.03, 0.95);
+        boolean yes = bot.getRandom().nextDouble() < chance;
+        this.brain.log(String.format(java.util.Locale.ROOT, "peace from %s (not mid-fight)? %.0f%% yes: %s", offer.fromName(), chance * 100, yes ? "yes" : "no"));
+        Peace.answer(offer, yes, now);
+        if (yes) {
+            Talk.accept(bot, this.brain.personality());
+            r.truceUntil = now + 24000L;
+            this.brain.feel(them, Feelings.Act.MADE_PEACE, 1);
+            this.brain.remember(BotMemory.EventType.TRUCE, offer.fromName());
+        } else {
+            Talk.refuse(bot, this.brain.personality());
+        }
+    }
+
+    private long calmAnswerAt = -1;
 
     private boolean makePeace(BotPlayer bot, ServerPlayer them, Relation r) {
         long until = this.brain.now() + 24000L;

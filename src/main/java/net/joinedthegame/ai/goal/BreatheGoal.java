@@ -55,10 +55,13 @@ public final class BreatheGoal extends Goal {
         return needsAir(bot) || (this.air != null && bot.isUnderWater()) ? 105 : 0;
     }
 
+    private boolean swimming;
+
     @Override
     public void start(BotPlayer bot) {
         this.ticks = 0;
         this.digging = false;
+        this.swimming = false;
         this.air = findAir(bot);
         if (this.air != null) this.brain.log("out of air: heading for " + this.air.toShortString());
         else this.brain.log("out of air and nowhere to swim to: digging up");
@@ -74,13 +77,23 @@ public final class BreatheGoal extends Goal {
         }
         this.brain.controls().jump = true; // swim up as we go
         BlockPos target = this.air;
+        if (this.swimming) {
+            if (swimRoute(bot)) {
+                if (this.ticks % 40 == 0) this.air = findAir(bot);
+                return true;
+            }
+            this.swimming = false;
+            if (this.route == null) this.digging = true;
+        }
         if (target != null && !this.digging) {
             Navigator nav = this.brain.navigator();
             if (!nav.isMoving()) {
                 nav.moveTo(bot, Vec3.atBottomCenterOf(target), p -> breathable(new WorldView(bot.level()), p));
                 if (nav.status() == Navigator.Status.FAILED) {
                     nav.stop(bot);
-                    this.digging = true;
+                    // The search found a way through the water: swim it ourselves rather than dig.
+                    if (this.route != null && !this.route.isEmpty()) this.swimming = true;
+                    else this.digging = true;
                 }
             }
             if (this.ticks % 40 == 0) this.air = findAir(bot); // (the water moves, we move)
@@ -108,25 +121,56 @@ public final class BreatheGoal extends Goal {
      * The nearest breathable spot we can swim to: a search outward through the water (and any
      * open space), never through solid blocks, up to about 16 blocks away.
      */
-    private static @Nullable BlockPos findAir(BotPlayer bot) {
+    private @Nullable BlockPos findAir(BotPlayer bot) {
         WorldView w = new WorldView(bot.level());
         BlockPos start = BlockPos.containing(bot.position());
         ArrayDeque<BlockPos> queue = new ArrayDeque<>();
-        Set<BlockPos> seen = new HashSet<>();
+        java.util.Map<BlockPos, BlockPos> from = new java.util.HashMap<>();
         queue.add(start);
-        seen.add(start);
-        while (!queue.isEmpty() && seen.size() < 2000) {
+        from.put(start, start);
+        while (!queue.isEmpty() && from.size() < 2000) {
             BlockPos p = queue.poll();
-            if (breathable(w, p)) return p;
+            if (breathable(w, p)) {
+                // Keep the way there (it's through water and open space only: swimmable).
+                java.util.LinkedList<BlockPos> route = new java.util.LinkedList<>();
+                for (BlockPos c = p; !c.equals(start); c = from.get(c)) route.addFirst(c);
+                this.route = route;
+                return p;
+            }
             for (Direction d : Direction.values()) {
                 BlockPos n = p.relative(d);
-                if (seen.contains(n) || n.distManhattan(start) > 24) continue;
+                if (from.containsKey(n) || n.distManhattan(start) > 24) continue;
                 if (!w.passable(n) && !w.isWater(n)) continue;
-                seen.add(n);
+                from.put(n, p);
                 queue.add(n);
             }
         }
+        this.route = null;
         return null;
+    }
+
+    /** The swim to the air found (cell by cell, through water and open space). */
+    private java.util.@Nullable LinkedList<BlockPos> route;
+
+    /**
+     * Swim the found route ourselves: the path planner can fail to plan through water to a pocket
+     * of air the search could see, and the fallback was digging straight up through rock while
+     * floating (a twenty-fifth the speed of digging on dry land). MadisonBeer drowned nine times in
+     * a flooded mineshaft that way, an air pocket three blocks off.
+     */
+    private boolean swimRoute(BotPlayer bot) {
+        var route = this.route;
+        if (route == null || route.isEmpty()) return false;
+        // Past a waypoint? Drop it.
+        while (!route.isEmpty() && Vec3.atCenterOf(route.getFirst()).distanceToSqr(bot.position().add(0, 0.5, 0)) < 0.7 * 0.7) route.removeFirst();
+        if (route.isEmpty()) return false;
+        BlockPos next = route.getFirst();
+        Vec3 aim = Vec3.atCenterOf(next);
+        this.brain.controls().lookAt(bot, aim);
+        this.brain.controls().forward = 1f;
+        this.brain.controls().jump = aim.y > bot.getY() + 0.3;
+        this.brain.controls().sneak = aim.y < bot.getY() - 0.3; // sink
+        return true;
     }
 
     @Override
