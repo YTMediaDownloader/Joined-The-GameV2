@@ -951,7 +951,7 @@ public final class CombatGoal extends Goal {
         BlockPos feet = Navigator.feet(bot).relative(dir);
         for (BlockPos c : new BlockPos[]{feet}) {
             if (bot.level().getBlockState(c).canBeReplaced() && !from.getBoundingBox().intersects(new net.minecraft.world.phys.AABB(c))) {
-                Placer.place(bot, c, Inv.scaffold(bot));
+                if (Placer.place(bot, c, Inv.scaffold(bot))) net.joinedthegame.ai.Scaffold.placed(bot, c);
             }
         }
     }
@@ -1380,6 +1380,7 @@ public final class CombatGoal extends Goal {
         this.brain.controls().face(bot.getYRot(), 90f);
         if (bot.onGround() && bot.getY() < base.getY() + 0.5) this.brain.controls().jump = true;
         if (bot.getY() > base.getY() + 1.05 && Placer.place(bot, base, Inv.scaffold(bot))) {
+            net.joinedthegame.ai.Scaffold.placed(bot, base);
             this.pillarHeight++;
         }
         return true;

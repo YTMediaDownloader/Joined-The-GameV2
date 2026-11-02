@@ -49,9 +49,13 @@ public final class HideTask implements Task {
      * Wall ourselves in where we stand: blocks all round at feet and head height and one
      * overhead. Quick, works against skeletons too, and nothing can reach in.
      */
+    /** A box on open ground (its roof is ours to take back; a pit's lid isn't: that'd leave a hole). */
+    private boolean boxed;
+
     public static HideTask box() {
         HideTask t = new HideTask();
         t.stage = Stage.BOX;
+        t.boxed = true;
         return t;
     }
 
@@ -203,7 +207,9 @@ public final class HideTask implements Task {
                 // A lid with nothing beside it to rest against (a hole only two deep on flat
                 // ground: the lid's cell is level with the open ground) never goes on. It used
                 // to try for ever, the bot frozen in its hole. Two seconds, then make do.
-                if (!Placer.place(bot, cap, Inv.scaffold(bot)) && ++this.sealTries > 40) {
+                boolean capped = Placer.place(bot, cap, Inv.scaffold(bot));
+                if (capped && this.boxed) net.joinedthegame.ai.Scaffold.placed(bot, cap);
+                if (!capped && ++this.sealTries > 40) {
                     this.sealTries = 0;
                     this.noLid = true;
                     this.stage = Stage.WAIT;
@@ -225,7 +231,7 @@ public final class HideTask implements Task {
                 } else if (this.jumpedFrom != null && bot.getY() > this.jumpedFrom.getY() + 1.05
                         && w.state(this.jumpedFrom).canBeReplaced()) {
                     // Top of the jump: put a block where we were standing.
-                    Placer.place(bot, this.jumpedFrom, Inv.scaffold(bot));
+                    if (Placer.place(bot, this.jumpedFrom, Inv.scaffold(bot))) net.joinedthegame.ai.Scaffold.placed(bot, this.jumpedFrom);
                 }
             }
             case BOX -> {
@@ -250,7 +256,9 @@ public final class HideTask implements Task {
                     return Status.RUNNING;
                 }
                 // A mob standing in the gap stops the block going in; skip it after a couple of tries.
-                if (!Placer.place(bot, next, Inv.scaffold(bot)) && ++this.boxTries > 3) {
+                boolean put = Placer.place(bot, next, Inv.scaffold(bot));
+                if (put) net.joinedthegame.ai.Scaffold.placed(bot, next);
+                if (!put && ++this.boxTries > 3) {
                     this.boxSkipped.add(next);
                     this.boxTries = 0;
                 }

@@ -99,6 +99,9 @@ public final class BotBrain {
     private @Nullable LivingEntity lastAttacker;
     private long lastAttackedAt;
 
+    /** Blocks put down just to get somewhere or out of trouble, to take back later (see {@link Scaffold}). */
+    public final java.util.List<Scaffold.Placed> scaffold = new java.util.ArrayList<>();
+
     /** When we last drank (or threw) a potion: see {@link Potions}. */
     public long lastPotionAt = Long.MIN_VALUE / 2;
 
@@ -152,6 +155,7 @@ public final class BotBrain {
                 new LootGoal(this),
                 new net.joinedthegame.ai.goal.SpawnerGoal(this),
                 new PickupGoal(this),
+                new net.joinedthegame.ai.goal.CleanupGoal(this),
                 new net.joinedthegame.ai.goal.LeisureGoal(this),
                 new net.joinedthegame.ai.goal.SocialGoal(this),
                 new net.joinedthegame.ai.goal.GreetGoal(this),

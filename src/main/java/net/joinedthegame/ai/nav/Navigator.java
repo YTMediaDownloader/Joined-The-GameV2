@@ -266,6 +266,8 @@ public final class Navigator {
 
     /** Stay under cover (set by the brain each tick: mining at night from a hole, see BotBrain). */
     public boolean underCover;
+    /** No putting blocks down to get there (tidying up: no pillaring up to take a pillar down). */
+    public boolean noPlacing;
 
     /**
      * Get there without coming up above {@code maxY}: tunnelling off underground, out of sight
@@ -329,6 +331,7 @@ public final class Navigator {
         }
         Pathfinder.Options options = Pathfinder.Options.normal(bot).below(this.ceiling);
         if (this.underCover) options = options.underCover();
+        if (this.noPlacing) options = new Pathfinder.Options(options.allowDig(), false, options.maxFall(), options.maxNodes(), options.maxY(), options.covered());
         Pathfinder finder = new Pathfinder(bot, options);
         Pathfinder.Path found = finder.find(start, this.goalPoint, this.goal);
         if (found == null || found.nodes().size() < 2) {
@@ -484,7 +487,7 @@ public final class Navigator {
                 } else {
                     controls.jump = true;
                     if (bot.getY() > node.place().getY() + 1.05 && this.placeCooldown == 0) {
-                        Placer.place(bot, node.place(), Inv.scaffold(bot));
+                        if (Placer.place(bot, node.place(), Inv.scaffold(bot))) net.joinedthegame.ai.Scaffold.placed(bot, node.place());
                         this.placeCooldown = 4;
                     }
                 }
@@ -520,6 +523,7 @@ public final class Navigator {
                         this.placeCooldown = 10;
                         if (Inv.scaffoldCount(bot) == 0) repath(bot);
                     } else {
+                        net.joinedthegame.ai.Scaffold.placed(bot, node.place());
                         this.placeCooldown = 4;
                     }
                 }
