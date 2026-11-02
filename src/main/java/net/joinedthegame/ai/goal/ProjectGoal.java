@@ -266,6 +266,8 @@ public final class ProjectGoal extends Goal {
      * it needs is put away.
      */
     private @Nullable Task kitFetch(BotPlayer bot, Kind kind) {
+        // At home: a fresh look in the chests first (someone may have put something in since).
+        net.joinedthegame.ai.Storage.refreshIfHome(bot, this.brain);
         boolean anyStored = false;
         for (var e : this.brain.memory().stored.entrySet()) {
             if (e.getValue() <= 0) continue;
@@ -275,14 +277,28 @@ public final class ProjectGoal extends Goal {
                 break;
             }
         }
+        // The secret stash too (lapis, gold, enchanted books...): it isn't on the remembered list,
+        // so only when home's close enough to look. (Lapis went into the stash and never came out:
+        // enchanting mined more instead.)
+        if (!anyStored && FetchTask.inStash(bot, this.brain, s -> wantedForKit(bot, kind, s))
+                - FetchTask.stored(bot, this.brain, s -> wantedForKit(bot, kind, s)) > 0) anyStored = true;
         if (!anyStored) return null;
         GlobalPos home = this.brain.record().home();
         if (home == null || home.dimension() != bot.level().dimension()) return null;
         this.brain.log("project " + kind + ": getting my things for it out of the chests");
-        Task fetch = net.joinedthegame.ai.task.Tasks.lazy(() -> FetchTask.from(bot, this.brain, s -> wantedForKit(bot, kind, s),
-                64 * 6, "Getting my things out for it"));
+        Task fetch = net.joinedthegame.ai.task.Tasks.anyway(
+                net.joinedthegame.ai.task.Tasks.lazy(() -> FetchTask.from(bot, this.brain, s -> wantedForKit(bot, kind, s),
+                        64 * 6, "Getting my things out for it")),
+                net.joinedthegame.ai.task.Tasks.lazy(() -> stashHas(bot, kind) ? FetchTask.fromStash(bot, this.brain,
+                        s -> wantedForKit(bot, kind, s), 64, "Getting my things out of the stash for it") : null));
         if (home.pos().distSqr(bot.blockPosition()) <= 64 * 64) return fetch;
         return net.joinedthegame.ai.task.Tasks.anyway(new net.joinedthegame.ai.task.TravelTask(home.pos(), 6, "Heading home for my things"), fetch);
+    }
+
+    /** Anything for this project in the secret stash (not counting the ordinary chests)? */
+    private boolean stashHas(BotPlayer bot, Kind kind) {
+        return FetchTask.inStash(bot, this.brain, s -> wantedForKit(bot, kind, s))
+                - FetchTask.stored(bot, this.brain, s -> wantedForKit(bot, kind, s)) > 0;
     }
 
     @Override

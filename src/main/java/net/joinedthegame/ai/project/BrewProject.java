@@ -75,6 +75,9 @@ public final class BrewProject implements Task {
     private boolean noCane;
     private boolean noBottles;
     private boolean patchTried;
+    private boolean harvestTried;
+    /** Brews whose ingredient couldn't be made this go. */
+    private final java.util.Set<String> cantMake = new java.util.HashSet<>();
     private int batches;
 
     // The batch in the stand
@@ -142,7 +145,10 @@ public final class BrewProject implements Task {
     /** In the bag, or put away in the chests at home (the project fetches it when it starts). */
     static int have(BotPlayer bot, BotBrain brain, Item item) {
         // (The remembered list: it works from anywhere, not just within sight of the chests.)
-        return Inv.count(bot, item) + net.joinedthegame.ai.Storage.stored(brain, item);
+        // (Plus the secret stash, where gold goes, when home's close enough to look in it.)
+        var p = (java.util.function.Predicate<net.minecraft.world.item.ItemStack>) s -> s.is(item);
+        int stash = net.joinedthegame.ai.task.FetchTask.inStash(bot, brain, p) - net.joinedthegame.ai.task.FetchTask.stored(bot, brain, p);
+        return Inv.count(bot, item) + net.joinedthegame.ai.Storage.stored(brain, item) + Math.max(0, stash);
     }
 
     /**
@@ -196,6 +202,7 @@ public final class BrewProject implements Task {
     public static boolean worthIt(BotPlayer bot, BotBrain brain) {
         GlobalPos home = brain.record().home();
         if (home == null || home.dimension() != bot.level().dimension()) return false;
+        net.joinedthegame.ai.Storage.refreshIfHome(bot, brain); // (at home: what's really in the chests now)
         boolean wart = have(bot, brain, Items.NETHER_WART) > 0 || patchRipe(bot, patch(bot, brain));
         if (!wart) return false;
         boolean stand = stand(bot, brain) != null || have(bot, brain, Items.BREWING_STAND) > 0 || have(bot, brain, Items.BLAZE_ROD) > 0;
@@ -261,7 +268,11 @@ public final class BrewProject implements Task {
 
         // A ripe wart patch: harvest and replant before anything else.
         BlockPos patch = patch(bot, brain);
-        if (patchRipe(bot, patch)) return harvestPatch(bot, brain, patch);
+        // Once a go: if it didn't work, brew anyway rather than try again and again.
+        if (patchRipe(bot, patch) && !this.harvestTried) {
+            this.harvestTried = true;
+            return harvestPatch(bot, brain, patch);
+        }
         if (patchEmpty(bot, patch) && Inv.count(bot, Items.NETHER_WART) > 0) {
             this.note = "Replanting nether wart";
             this.sub = new BuildTask(List.of(BuildTask.Step.placeEssential(patch, s -> s.is(Items.NETHER_WART), null)), "Replanting nether wart");
@@ -282,7 +293,15 @@ public final class BrewProject implements Task {
             brain.log("brewing: out of nether wart");
             return Status.DONE;
         }
-        Brew next = pick(bot, brain, this.noCane);
+        net.joinedthegame.ai.Storage.refreshIfHome(bot, brain);
+        Brew next = null;
+        for (Brew b : MENU) {
+            if (this.cantMake.contains(b.name()) || Potions.count(bot, b.effect()) >= WANT_EACH) continue;
+            if (obtainable(bot, brain, b, this.noCane)) {
+                next = b;
+                break;
+            }
+        }
         if (next == null) return Status.DONE;
 
         // Fuel: blaze powder, made from a rod.
@@ -303,7 +322,17 @@ public final class BrewProject implements Task {
                 return Status.RUNNING;
             }
             this.note = "Making " + net.joinedthegame.ai.Planner.name(next.ingredient());
-            return toward(bot, net.joinedthegame.ai.Planner.name(next.ingredient()), next.ingredient(), 1);
+            boolean[] failed = {false};
+            Item ing = next.ingredient();
+            Task t = Tasks.toward(bot, Tasks.Need.of(net.joinedthegame.ai.Planner.name(ing), s -> s.is(ing), 1, b -> ing), failed);
+            if (failed[0] || t == null) {
+                // Can't make that one (the planner found no way): say so, and brew something else.
+                brain.log("brewing: can't make " + net.joinedthegame.ai.Planner.name(ing) + " for " + next.name() + ", brewing something else");
+                this.cantMake.add(next.name());
+                return Status.RUNNING;
+            }
+            this.sub = t;
+            return Status.RUNNING;
         }
         // Three bottles of water.
         int water = Inv.count(bot, Brewer::isWater);
@@ -594,7 +623,9 @@ public final class BrewProject implements Task {
     private Status harvestPatch(BotPlayer bot, BotBrain brain, BlockPos patch) {
         this.note = "Picking nether wart";
         brain.log("brewing: picking the nether wart");
-        this.sub = Tasks.sequence(new BuildTask(List.of(BuildTask.Step.digEssential(patch)), "Picking nether wart"),
+        // (clearOut: wart has nothing to bump into, so a plain dig counted it "dug" already and
+        // never broke it: "picking the nether wart" over and over.)
+        this.sub = Tasks.sequence(new BuildTask(List.of(BuildTask.Step.clearOut(patch)), "Picking nether wart"),
                 new CollectItems(patch, 4, 60),
                 new BuildTask(List.of(BuildTask.Step.placeEssential(patch, s -> s.is(Items.NETHER_WART), null)), "Replanting nether wart"),
                 new Remember(patch, "wart_patch", Blocks.NETHER_WART, "a nether wart patch"));

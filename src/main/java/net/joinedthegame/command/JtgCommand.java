@@ -114,6 +114,19 @@ public final class JtgCommand {
                             .then(Commands.literal("home")
                                     .then(Commands.argument("at", net.minecraft.commands.arguments.coordinates.BlockPosArgument.blockPos())
                                             .executes(JtgCommand::debugHome)))
+                            .then(Commands.literal("stash")
+                                    .then(Commands.argument("at", net.minecraft.commands.arguments.coordinates.BlockPosArgument.blockPos())
+                                            .executes(c -> {
+                                                BotManager m = BotManager.get(c.getSource().getServer());
+                                                BotRecord r = m.roster().get(name(c));
+                                                BotPlayer b = r == null ? null : m.online(r);
+                                                if (b == null) return 0;
+                                                var at = net.minecraft.commands.arguments.coordinates.BlockPosArgument.getBlockPos(c, "at");
+                                                // (Testing: this chest is their secret stash.)
+                                                m.setHouse(r, r.house(), net.minecraft.core.GlobalPos.of(b.level().dimension(), at));
+                                                c.getSource().sendSuccess(() -> Component.literal(r.name() + "'s stash is now " + at.toShortString()), false);
+                                                return 1;
+                                            })))
                             .then(Commands.literal("partner")
                                     .then(Commands.argument("other", StringArgumentType.word()).executes(c -> {
                                         BotManager m = BotManager.get(c.getSource().getServer());
