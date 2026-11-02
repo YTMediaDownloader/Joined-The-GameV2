@@ -39,8 +39,60 @@ public final class Snapshot {
     private static final DateTimeFormatter TIME = DateTimeFormatter.ofPattern("HH:mm:ss");
     private static boolean failed;
 
+    private static @Nullable Thread lagWatch;
+
+    /**
+     * Lag catcher (testing jar): a background thread that, while the server's running slow (over
+     * 60 ms a tick), looks at what the server thread is doing twice a second and writes the busiest
+     * spots to {@code logs/joinedthegame-lag.txt}. Lag that comes and goes at random can't be
+     * caught by hand; this catches it in the act.
+     */
+    private static void startLagWatch(MinecraftServer server) {
+        Thread serverThread = Thread.currentThread();
+        Thread t = new Thread(() -> {
+            java.util.Map<String, Integer> counts = new java.util.HashMap<>();
+            int samples = 0;
+            long lastWrite = 0;
+            while (server.isRunning()) {
+                try {
+                    Thread.sleep(500);
+                    double ms = server.getAverageTickTimeNanos() / 1_000_000.0;
+                    if (ms < 60) continue;
+                    StackTraceElement[] st = serverThread.getStackTrace();
+                    StringBuilder key = new StringBuilder();
+                    int shown = 0;
+                    for (StackTraceElement e : st) {
+                        String c = e.getClassName();
+                        if (c.startsWith("java.") || c.startsWith("jdk.")) continue;
+                        key.append(c.substring(c.lastIndexOf('.') + 1)).append('.').append(e.getMethodName()).append(':').append(e.getLineNumber()).append(" < ");
+                        if (++shown == 6) break;
+                    }
+                    counts.merge(key.toString(), 1, Integer::sum);
+                    samples++;
+                    if (System.currentTimeMillis() - lastWrite > 15_000) {
+                        lastWrite = System.currentTimeMillis();
+                        StringBuilder out = new StringBuilder("Lag samples at " + LocalTime.now().format(TIME) + " (" + samples
+                                + " while over 60 ms/tick; now " + Math.round(ms) + " ms)\n");
+                        counts.entrySet().stream().sorted((a, b) -> b.getValue() - a.getValue()).limit(15)
+                                .forEach(e -> out.append(String.format("%4d  %s%n", e.getValue(), e.getKey())));
+                        Path dir = net.neoforged.fml.loading.FMLPaths.GAMEDIR.get().resolve("logs");
+                        Files.writeString(dir.resolve("joinedthegame-lag.txt"), out.toString(), StandardCharsets.UTF_8);
+                    }
+                } catch (InterruptedException e) {
+                    return;
+                } catch (Exception ignored) {
+                    // never let a debug aid trouble the game
+                }
+            }
+        }, "JTG lag watch");
+        t.setDaemon(true);
+        t.start();
+        lagWatch = t;
+    }
+
     /** Every server tick; writes once every five seconds. */
     public static void tick(MinecraftServer server) {
+        if (DebugLog.on() && (lagWatch == null || !lagWatch.isAlive())) startLagWatch(server);
         if (failed || !DebugLog.on() || server.getTickCount() % 100 != 0) return;
         try {
             write(server);
