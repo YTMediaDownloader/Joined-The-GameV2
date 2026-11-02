@@ -841,23 +841,7 @@ public final class CombatGoal extends Goal {
         if (this.cover == null) {
             if (dist < 9 || this.brain.now() - this.coverTriedAt < 20 * 15) return false;
             this.coverTriedAt = this.brain.now();
-            WorldView w = new WorldView(bot.level());
-            BlockPos feet = Navigator.feet(bot);
-            BlockPos best = null;
-            double bestDist = Double.MAX_VALUE;
-            for (BlockPos c : BlockPos.betweenClosed(feet.offset(-5, -1, -5), feet.offset(5, 1, 5))) {
-                if (!w.passable(c) || !w.passable(c.above()) || !w.solidFloor(c.below()) || WorldView.isDangerous(w.state(c.below()))) continue;
-                Vec3 head = Vec3.atBottomCenterOf(c).add(0, 1.6, 0);
-                if (Math.sqrt(c.distToCenterSqr(archer.position())) < dist - 2) continue; // not towards it
-                var hit = bot.level().clip(new net.minecraft.world.level.ClipContext(archer.getEyePosition(), head,
-                        net.minecraft.world.level.ClipContext.Block.COLLIDER, net.minecraft.world.level.ClipContext.Fluid.NONE, archer));
-                if (hit.getType() != net.minecraft.world.phys.HitResult.Type.BLOCK) continue; // it can see there
-                double d = c.distToCenterSqr(bot.position());
-                if (d < bestDist) {
-                    bestDist = d;
-                    best = c.immutable();
-                }
-            }
+            BlockPos best = coverFrom(bot, archer);
             if (best == null) return false;
             this.cover = best;
             this.coverTicks = 0;
@@ -878,6 +862,29 @@ public final class CombatGoal extends Goal {
         nav.stop(bot);
         this.brain.controls().lookAt(bot, archer.getBoundingBox().getCenter());
         return true;
+    }
+
+    /** The nearest spot (within 5) the archer can't see, and not towards it; null if none. */
+    private static @Nullable BlockPos coverFrom(BotPlayer bot, LivingEntity archer) {
+        WorldView w = new WorldView(bot.level());
+        BlockPos feet = Navigator.feet(bot);
+        double dist = Math.sqrt(archer.distanceToSqr(bot));
+        BlockPos best = null;
+        double bestDist = Double.MAX_VALUE;
+        for (BlockPos c : BlockPos.betweenClosed(feet.offset(-5, -1, -5), feet.offset(5, 1, 5))) {
+            if (!w.passable(c) || !w.passable(c.above()) || !w.solidFloor(c.below()) || WorldView.isDangerous(w.state(c.below()))) continue;
+            Vec3 head = Vec3.atBottomCenterOf(c).add(0, 1.6, 0);
+            if (Math.sqrt(c.distToCenterSqr(archer.position())) < dist - 2) continue; // not towards it
+            var hit = bot.level().clip(new net.minecraft.world.level.ClipContext(archer.getEyePosition(), head,
+                    net.minecraft.world.level.ClipContext.Block.COLLIDER, net.minecraft.world.level.ClipContext.Fluid.NONE, archer));
+            if (hit.getType() != net.minecraft.world.phys.HitResult.Type.BLOCK) continue; // it can see there
+            double d = c.distToCenterSqr(bot.position());
+            if (d < bestDist) {
+                bestDist = d;
+                best = c.immutable();
+            }
+        }
+        return best;
     }
 
     // --- creepers -------------------------------------------------------------------------
@@ -1044,6 +1051,7 @@ public final class CombatGoal extends Goal {
             this.hiddenTicks = 0;
             this.tunnelTo = null;
             this.tunnelling = false;
+            this.retreatCover = null;
             // Remember who did this (the nearest archer, or whoever hit us).
             this.cause = nearby.stream().filter(CombatGoal::isRanged).min(java.util.Comparator.comparingDouble(m -> m.distanceToSqr(bot)))
                     .orElse(this.brain.recentAttacker() instanceof Mob m && isRanged(m) ? m : null);
@@ -1058,7 +1066,14 @@ public final class CombatGoal extends Goal {
             boolean blocks = Inv.scaffoldCount(bot) >= 3;
             String how;
             boolean nether = bot.level().dimension() == net.minecraft.world.level.Level.NETHER;
-            if (archers && nearest > 3.5 && !nether) {
+            Mob archer = nearby.stream().filter(CombatGoal::isRanged).min(java.util.Comparator.comparingDouble(m -> m.distanceToSqr(bot))).orElse(null);
+            BlockPos corner = archers && nearest > 3.5 && !nether && archer != null ? coverFrom(bot, archer) : null;
+            if (corner != null) {
+                // Out of its sight round a corner first: digging a hole in plain view of a skeleton is
+                // five arrows in the back before it's deep enough (Sparklez, twice; Duck).
+                this.retreatCover = corner;
+                how = "out of its sight round the corner at " + corner.toShortString();
+            } else if (archers && nearest > 3.5 && !nether) {
                 this.hide = new net.joinedthegame.ai.task.HideTask();
                 how = "digging in";
             } else if (nether) {
@@ -1083,6 +1098,7 @@ public final class CombatGoal extends Goal {
                     power(bot) / Math.max(0.01, danger(bot, nearby)), how));
         }
         if (this.hide != null) return hideOut(bot, nearby);
+        if (this.retreatCover != null) return takeCover(bot, nearby);
         this.retreatTicks++;
         lowerShield(bot);
         Navigator nav = this.brain.navigator();
@@ -1195,6 +1211,88 @@ public final class CombatGoal extends Goal {
             }
         }
         return this.retreatTicks < 20 * 45;
+    }
+
+    /** Round the corner from an archer we're getting away from (see retreat). */
+    private @Nullable BlockPos retreatCover;
+
+    /**
+     * Out of the archer's sight round a corner: get there, eat to heal, fight whatever comes round
+     * the corner onto us, move on (or dig in) if it finds a shot at us again, and call it over once
+     * it's quiet.
+     */
+    private boolean takeCover(BotPlayer bot, List<Mob> nearby) {
+        this.retreatTicks++;
+        Navigator nav = this.brain.navigator();
+        BlockPos to = this.retreatCover;
+        if (!Navigator.feet(bot).equals(to)) {
+            if (this.retreatTicks > 20 * 8) return coverFailed("couldn't get round the corner in time: digging in");
+            nav.sprint = true;
+            if (!nav.isMoving()) {
+                nav.moveTo(bot, Vec3.atBottomCenterOf(to), p -> p.equals(to));
+                if (nav.status() == Navigator.Status.FAILED) return coverFailed("no way round the corner: digging in");
+            }
+            return true;
+        }
+        nav.stop(bot);
+        // Something come round the corner onto us: shield up while the swing charges, then hit it.
+        Mob close = nearby.stream().filter(m -> m.distanceToSqr(bot) < 3.2 * 3.2 && bot.hasLineOfSight(m))
+                .min(java.util.Comparator.comparingDouble(m -> m.distanceToSqr(bot))).orElse(null);
+        if (close != null) {
+            this.brain.controls().lookAt(bot, close.getBoundingBox().getCenter());
+            if (bot.getAttackStrengthScale(0.5f) > 0.9f) {
+                lowerShield(bot);
+                swing(bot, close);
+            } else if (hasShield(bot)) {
+                raiseShield(bot);
+            }
+            this.safeTicks = 0;
+            return true;
+        }
+        // It's found a shot at us here: the next corner, or dig in if there's none.
+        Mob shooter = nearby.stream().filter(m -> isRanged(m) && bot.hasLineOfSight(m)).findFirst().orElse(null);
+        if (shooter != null) {
+            if (++this.exposedTicks > 30) {
+                this.exposedTicks = 0;
+                BlockPos next = coverFrom(bot, shooter);
+                if (next == null || next.equals(to)) return coverFailed("it can see me round here too: digging in");
+                this.retreatCover = next;
+                this.retreatTicks = 0;
+                this.brain.log("it can see me here: the next corner, " + next.toShortString());
+            }
+        } else {
+            this.exposedTicks = 0;
+        }
+        // Out of sight: eat to heal (a golden apple if it's bad).
+        if (shooter == null && !bot.isUsingItem() && bot.getFoodData().getFoodLevel() < 20 && bot.getHealth() < bot.getMaxHealth()) {
+            int food = Inv.bestFood(bot, bot.getFoodData().getFoodLevel() <= 6);
+            if (bot.getHealth() <= 6) {
+                int golden = Inv.find(bot, st -> st.is(Items.GOLDEN_APPLE) || st.is(Items.ENCHANTED_GOLDEN_APPLE));
+                if (golden >= 0) food = golden;
+            }
+            if (food >= 0) {
+                Inv.hold(bot, food);
+                bot.gameMode.useItem(bot, bot.level(), bot.getMainHandItem(), InteractionHand.MAIN_HAND);
+            }
+        }
+        // Quiet a while (nothing close, nothing with a shot at us): over.
+        boolean threat = nearby.stream().anyMatch(m -> m.distanceToSqr(bot) < 6 * 6 || isRanged(m) && bot.hasLineOfSight(m));
+        if (threat) {
+            this.safeTicks = 0;
+        } else if (++this.safeTicks > 100) {
+            this.retreating = false;
+            this.retreatCover = null;
+            cooldown(this.brain.now(), 20 * 5);
+            return false;
+        }
+        return this.retreatTicks < 20 * 60;
+    }
+
+    private boolean coverFailed(String why) {
+        this.brain.log(why);
+        this.retreatCover = null;
+        this.hide = new net.joinedthegame.ai.task.HideTask();
+        return true;
     }
 
     /** In the hole: eat to heal, and come out once things have calmed down. */
