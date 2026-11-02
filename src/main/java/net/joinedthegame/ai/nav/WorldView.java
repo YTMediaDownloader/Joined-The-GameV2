@@ -33,7 +33,33 @@ public final class WorldView {
         return this.level;
     }
 
+    /**
+     * Remember each block looked at, for the life of this view. Only for a view that lives a
+     * moment, like one path search (the world doesn't change under it): a search asks about the
+     * same blocks over and over (passable? breakable? floor?), and each ask unpacks the chunk's
+     * palette. Six bots planning at sunrise spent their tick doing exactly that.
+     */
+    public WorldView cached() {
+        this.cache = new it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap<>(); // grows as the search does
+        return this;
+    }
+
+    private it.unimi.dsi.fastutil.longs.@org.jspecify.annotations.Nullable Long2ObjectOpenHashMap<BlockState> cache;
+
     public BlockState state(BlockPos pos) {
+        if (this.cache != null) {
+            long k = pos.asLong();
+            BlockState s = this.cache.get(k);
+            if (s == null) {
+                s = lookup(pos);
+                this.cache.put(k, s);
+            }
+            return s;
+        }
+        return lookup(pos);
+    }
+
+    private BlockState lookup(BlockPos pos) {
         if (pos.getY() < this.level.getMinY() || pos.getY() > this.level.getMaxY()) {
             return pos.getY() < this.level.getMinY() ? UNLOADED : Blocks.AIR.defaultBlockState();
         }
@@ -299,6 +325,21 @@ public final class WorldView {
     public float breakTicks(BotPlayer bot, BlockPos pos) {
         BlockState state = state(pos);
         if (passable(pos)) return 0;
+        // In a search (cached view), once per kind of block: it's the same tools all search long,
+        // and this went through the whole bag for every block looked at.
+        if (this.cache != null) {
+            float known = this.breakCache.getOrDefault(state, -1f);
+            if (known >= 0) return known;
+            float ticks = breakTicksUncached(bot, pos, state);
+            this.breakCache.put(state, ticks);
+            return ticks;
+        }
+        return breakTicksUncached(bot, pos, state);
+    }
+
+    private final it.unimi.dsi.fastutil.objects.Reference2FloatOpenHashMap<BlockState> breakCache = new it.unimi.dsi.fastutil.objects.Reference2FloatOpenHashMap<>();
+
+    private float breakTicksUncached(BotPlayer bot, BlockPos pos, BlockState state) {
         float best = Math.max(state.getDestroyProgress(bot, this.level, pos), 0.0001f);
         // Estimate with the best tool in the inventory, not whatever is in hand.
         float hardness = state.getDestroySpeed(this.level, pos);

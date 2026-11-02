@@ -56,8 +56,23 @@ public class BotPlayer extends ServerPlayer {
         // Normally the client's movement packets drive this; for a bot the server does it.
         this.doTick();
         this.connection.resetPosition();
-        this.level().getChunkSource().move(this);
+        // Who sees what (entity tracking) and which chunks are ours: a real client only triggers
+        // this when it moves, and once a second standing still. Every bot every tick was the
+        // biggest single cost the lag catcher found with 20 bots about.
+        double moved = this.position().distanceToSqr(this.lastTrackX, this.lastTrackY, this.lastTrackZ);
+        if (moved > 0.0001 || Math.abs(this.getYRot() - this.lastTrackYaw) > 1 || this.tickCount - this.lastTrackTick >= 20) {
+            this.lastTrackX = this.getX();
+            this.lastTrackY = this.getY();
+            this.lastTrackZ = this.getZ();
+            this.lastTrackYaw = this.getYRot();
+            this.lastTrackTick = this.tickCount;
+            this.level().getChunkSource().move(this);
+        }
     }
+
+    private double lastTrackX = Double.NaN, lastTrackY, lastTrackZ;
+    private float lastTrackYaw;
+    private int lastTrackTick;
 
     /** Ticks since this bot died, counted by BotManager. */
     int deadTicks;

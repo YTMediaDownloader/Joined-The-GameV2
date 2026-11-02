@@ -65,7 +65,7 @@ public final class Snapshot {
                         String c = e.getClassName();
                         if (c.startsWith("java.") || c.startsWith("jdk.")) continue;
                         key.append(c.substring(c.lastIndexOf('.') + 1)).append('.').append(e.getMethodName()).append(':').append(e.getLineNumber()).append(" < ");
-                        if (++shown == 6) break;
+                        if (++shown == 12) break;
                     }
                     counts.merge(key.toString(), 1, Integer::sum);
                     samples++;

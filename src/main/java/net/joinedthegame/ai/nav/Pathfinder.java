@@ -77,7 +77,7 @@ public final class Pathfinder {
 
     public Pathfinder(BotPlayer bot, Options options) {
         this.bot = bot;
-        this.world = new WorldView(bot.level());
+        this.world = new WorldView(bot.level()).cached(); // one search, one tick: safe to remember
         // Frost Walker boots on, and on our feet (it does nothing while swimming): water's a road.
         this.world.frostWalk = !bot.isInWater() && frostWalker(bot);
         this.options = options;

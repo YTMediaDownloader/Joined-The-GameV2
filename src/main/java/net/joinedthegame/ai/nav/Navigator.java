@@ -292,7 +292,34 @@ public final class Navigator {
         computePath(bot);
     }
 
+    /**
+     * Path searches allowed per server tick, between all the bots. At sunrise everyone set off at
+     * once and planned long routes on the same tick: the lag catcher caught the server spending
+     * its whole tick in their searches. Over the budget, a bot waits its turn (a tick or two).
+     */
+    private static final int SEARCHES_PER_TICK = 1;
+    /** Only routes this far count against it: a fight's quick re-plans (a few blocks) never wait. */
+    private static final double LONG_ROUTE = 32;
+    private static long searchTick = -1;
+    private static int searches;
+    /** Asked for a path while the budget was spent: plan it next tick. */
+    private boolean waitingToPlan;
+
     private void computePath(BotPlayer bot) {
+        long now = bot.level().getGameTime();
+        if (searchTick != now) {
+            searchTick = now;
+            searches = 0;
+        }
+        boolean longRoute = this.goalPoint != null && bot.position().distanceTo(this.goalPoint) > LONG_ROUTE;
+        if (longRoute && searches >= SEARCHES_PER_TICK) {
+            this.waitingToPlan = true;
+            this.status = Status.MOVING;
+            this.path = null;
+            return;
+        }
+        if (longRoute) searches++;
+        this.waitingToPlan = false;
         releaseBreaker(bot);
         BlockPos start = groundedStart(bot);
         if (this.goal.test(start)) {
@@ -349,6 +376,12 @@ public final class Navigator {
     }
 
     public void tick(BotPlayer bot, Controls controls) {
+        if (this.waitingToPlan) {
+            // Our turn to plan (or we've been stopped meanwhile: then never mind).
+            if (this.status == Status.MOVING) computePath(bot);
+            else this.waitingToPlan = false;
+            return;
+        }
         if (this.clearView != null && this.status == Status.MOVING && this.path == null) {
             clearTheView(bot, controls);
             return;
