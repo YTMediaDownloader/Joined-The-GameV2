@@ -251,7 +251,10 @@ public final class Planner {
         int have = have(item);
         int score;
         if (have >= needed) score = 1000 + have;
-        else if (have > 0) score = 500 + have;
+        // Some of it already: best if the rest can be made from the bag too. If not, behind one
+        // that can (stampylongnose had 2 oak planks and 31 birch logs, and chopped birch for ever
+        // trying to get "2 more oak planks").
+        else if (have > 0) score = craftableFromBag(item) ? 500 + have : Math.min(399, 350 + have);
         else if (craftableFromBag(item)) score = 400;
         else if (Sources.forItem(item) != null) score = 300;
         else if (!Recipes.craftingFor(this.server, item).isEmpty()) score = 100;
