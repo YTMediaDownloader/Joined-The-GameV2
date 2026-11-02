@@ -32,6 +32,12 @@ import net.neoforged.neoforge.event.tick.ServerTickEvent;
 
 @EventBusSubscriber(modid = JoinedTheGame.MODID)
 public final class JtgEvents {
+    /** Datapacks reloaded: block tags may have changed under remembered answers. */
+    @SubscribeEvent
+    public static void onTagsUpdated(net.neoforged.neoforge.event.TagsUpdatedEvent event) {
+        net.joinedthegame.ai.nav.WorldView.forgetDangers();
+    }
+
     private JtgEvents() {}
 
     /** Real players who were crouching last tick, to spot the moment they crouch. */

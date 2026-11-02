@@ -142,10 +142,31 @@ public final class WorldView {
     public static boolean portalsOk;
 
     public static boolean isDangerous(BlockState state) {
+        // The portal depends on the moment (portalsOk), so it's asked every time; everything else
+        // depends only on the block, so it's worked out once per kind and remembered (asked
+        // constantly by pathfinding: a long chain of checks, about a twentieth of a busy tick).
+        if (state.is(Blocks.NETHER_PORTAL)) return !portalsOk;
+        byte known = DANGER.getByte(state);
+        if (known == 0) {
+            known = dangerousBlock(state) ? (byte) 2 : (byte) 1;
+            DANGER.put(state, known);
+        }
+        return known == 2;
+    }
+
+    /** Remembered answers (0 = not worked out yet, 1 = safe, 2 = dangerous). */
+    private static final it.unimi.dsi.fastutil.objects.Reference2ByteOpenHashMap<BlockState> DANGER = new it.unimi.dsi.fastutil.objects.Reference2ByteOpenHashMap<>();
+
+    /** Tags can change when datapacks reload (campfires, pressure plates): start the answers over. */
+    public static void forgetDangers() {
+        DANGER.clear();
+    }
+
+    private static boolean dangerousBlock(BlockState state) {
         return state.is(Blocks.LAVA) || state.is(Blocks.FIRE) || state.is(Blocks.SOUL_FIRE) || state.is(Blocks.MAGMA_BLOCK)
                 || state.is(Blocks.CACTUS) || state.is(Blocks.SWEET_BERRY_BUSH) || state.is(Blocks.POWDER_SNOW)
                 || state.is(Blocks.WITHER_ROSE) || state.is(BlockTags.CAMPFIRES) || state.is(Blocks.POINTED_DRIPSTONE)
-                || state.is(Blocks.NETHER_PORTAL) && !portalsOk || state.is(Blocks.END_PORTAL) || state.is(Blocks.COBWEB)
+                || state.is(Blocks.END_PORTAL) || state.is(Blocks.COBWEB)
                 || state.getFluidState().is(FluidTags.LAVA)
                 // Traps and alarms: the desert temple's TNT plate, jungle temple tripwires, and
                 // sculk that calls the warden.
