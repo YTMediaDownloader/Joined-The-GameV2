@@ -46,6 +46,19 @@ public final class Potions {
         return has;
     }
 
+    /** Worth carrying: does something good (not water, awkward or mundane), and nothing harmful. */
+    public static boolean useful(ItemStack s) {
+        if (!(s.is(Items.POTION) || s.is(Items.SPLASH_POTION))) return false;
+        PotionContents c = s.get(DataComponents.POTION_CONTENTS);
+        if (c == null) return false;
+        boolean good = false;
+        for (MobEffectInstance e : c.getAllEffects()) {
+            if (e.getEffect().value().getCategory() == MobEffectCategory.HARMFUL) return false;
+            good = true;
+        }
+        return good;
+    }
+
     /** A potion in the bag giving that effect (splash first if {@code splashFirst}), or -1. */
     public static int find(BotPlayer bot, Holder<MobEffect> effect, boolean splashFirst) {
         int drink = -1;

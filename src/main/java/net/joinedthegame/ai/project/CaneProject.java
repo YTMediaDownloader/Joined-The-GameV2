@@ -38,7 +38,8 @@ public final class CaneProject implements Task {
         GlobalPos home = brain.record().home();
         if (home == null || home.dimension() != bot.level().dimension()) return false;
         if (brain.memory().ever(BotMemory.EventType.BUILT, "a sugar cane patch")) return false;
-        return Inv.count(bot, Items.SUGAR_CANE) >= 2 || brain.memory().nearest("sugar_cane", home, 160) != null;
+        return Inv.count(bot, Items.SUGAR_CANE) + net.joinedthegame.ai.Storage.stored(brain, Items.SUGAR_CANE) >= 2
+                || brain.memory().nearest("sugar_cane", home, 160) != null;
     }
 
     @Override

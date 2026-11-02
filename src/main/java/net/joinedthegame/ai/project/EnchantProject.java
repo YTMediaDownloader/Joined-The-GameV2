@@ -65,10 +65,14 @@ public final class EnchantProject implements Task {
 
     /** The table we use: remembered, and still there. */
     public static @Nullable BlockPos table(BotPlayer bot, BotBrain brain) {
-        GlobalPos here = GlobalPos.of(bot.level().dimension(), bot.blockPosition());
-        GlobalPos known = brain.memory().nearest("enchanting_table", here, 256);
+        // Looked for round home, where it's set up (home's dimension too), not round wherever the
+        // bot's got to: from 300 blocks off it "had no table" and went to make another.
+        GlobalPos home = brain.record().home();
+        GlobalPos from = home != null ? home : GlobalPos.of(bot.level().dimension(), bot.blockPosition());
+        GlobalPos known = brain.memory().nearest("enchanting_table", from, home != null ? 64 : 256);
         if (known == null) return null;
-        if (bot.level().isLoaded(known.pos()) && !bot.level().getBlockState(known.pos()).is(Blocks.ENCHANTING_TABLE)) {
+        if (known.dimension() == bot.level().dimension() && bot.level().isLoaded(known.pos())
+                && !bot.level().getBlockState(known.pos()).is(Blocks.ENCHANTING_TABLE)) {
             brain.memory().forget("enchanting_table", known);
             return null;
         }

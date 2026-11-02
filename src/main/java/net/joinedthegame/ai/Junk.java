@@ -44,7 +44,18 @@ public final class Junk {
                 || stack.is(net.minecraft.tags.BlockItemTags.SMALL_FLOWERS.item()) || stack.is(Items.SAND)
                 // Enchanting: lapis, books and what they're made of, shelves, the table itself.
                 || stack.is(Items.LAPIS_LAZULI) || stack.is(Items.SUGAR_CANE) || stack.is(Items.PAPER) || stack.is(Items.BOOK)
-                || stack.is(Items.BOOKSHELF) || stack.is(Items.ENCHANTING_TABLE) || stack.is(Items.ENCHANTED_BOOK);
+                || stack.is(Items.BOOKSHELF) || stack.is(Items.ENCHANTING_TABLE) || stack.is(Items.ENCHANTED_BOOK)
+                // Brewing: the stand and its fuel, wart, bottles, every ingredient and what improves
+                // them. (Not keepers before, so a full bag threw the wart out as odds and ends, and
+                // a nether trip's blaze rods with it.)
+                || isBrewingStuff(stack);
+    }
+
+    public static boolean isBrewingStuff(ItemStack stack) {
+        return stack.is(Items.BLAZE_ROD) || stack.is(Items.BLAZE_POWDER) || stack.is(Items.NETHER_WART) || stack.is(Items.BREWING_STAND)
+                || stack.is(Items.GLASS_BOTTLE) || stack.is(Items.GHAST_TEAR) || stack.is(Items.MAGMA_CREAM) || stack.is(Items.SLIME_BALL)
+                || stack.is(Items.GLISTERING_MELON_SLICE) || stack.is(Items.GLOWSTONE_DUST) || stack.is(Items.REDSTONE)
+                || stack.is(Items.GUNPOWDER) || stack.is(Items.SUGAR) || stack.is(Items.PUFFERFISH) || stack.is(Items.SOUL_SAND);
     }
 
     /** Items worth putting in a chest at home rather than carrying around. */
@@ -63,6 +74,15 @@ public final class Junk {
         if (stack.is(Items.SHIELD) || stack.is(Items.BOW) || stack.is(Items.CROSSBOW) || isWeaponItem(stack)) return Integer.MAX_VALUE;
         if (stack.is(Items.WIND_CHARGE)) return 16;
         if (stack.is(Items.ENDER_PEARL)) return 16;
+        // Potions are for using, out there (healing in a fight, fire resistance in the nether):
+        // a potion in a chest at home is no use to anyone. They don't stack (a slot each), so a
+        // handful: the rest wait at home.
+        if (stack.is(Items.POTION) || stack.is(Items.SPLASH_POTION)) {
+            // Only ones worth drinking get the slots: water, awkward and anything harmful wait at
+            // home (brewing keeps its water bottles on its own list).
+            if (!Potions.useful(stack)) return 0;
+            return stack.is(Items.POTION) ? 6 : 4;
+        }
         if (stack.is(net.minecraft.tags.ItemTags.ARROWS)) return 64;
         if (stack.is(Items.TOTEM_OF_UNDYING) || stack.is(net.minecraft.tags.ItemTags.BUNDLES)) return Integer.MAX_VALUE;
         if (stack.has(DataComponents.FOOD) && !Inv.isBadFood(stack)) return Integer.MAX_VALUE;
@@ -85,7 +105,7 @@ public final class Junk {
      * Extra kit for whatever the bot's doing right now: the job's materials stay in the bag.
      * Building: the lot. Enchanting: books, lapis, leather. A farm: seeds. A dog: bones.
      */
-    static int forTheJob(BotBrain brain, ItemStack s) {
+    public static int forTheJob(BotBrain brain, ItemStack s) {
         var kind = brain.projects().current();
         if (kind != null && brain.focus() == BotBrain.Focus.PROJECT) {
             switch (kind) {
@@ -105,6 +125,9 @@ public final class Junk {
                     if (s.is(Items.STRING) || s.is(Items.FEATHER) || s.is(Items.FLINT)) return 64;
                 }
                 case TRIAL_CHAMBER -> {
+                    // A few more potions than usual, not every one in the chests (they don't stack).
+                    if (s.is(Items.POTION)) return Potions.useful(s) ? 8 : 0;
+                    if (s.is(Items.SPLASH_POTION)) return Potions.useful(s) ? 4 : 0;
                     // The chamber kit: keys, the ominous bottle, wind charges, potions, pearls, totems.
                     if (s.is(Items.TRIAL_KEY) || s.is(Items.OMINOUS_TRIAL_KEY) || s.is(Items.OMINOUS_BOTTLE) || s.is(Items.WIND_CHARGE)
                             || s.is(Items.POTION) || s.is(Items.SPLASH_POTION) || s.is(Items.ENDER_PEARL) || s.is(Items.GOLDEN_APPLE)
@@ -121,6 +144,35 @@ public final class Junk {
                             || s.is(Items.NETHERITE_UPGRADE_SMITHING_TEMPLATE) || s.is(Items.GOLD_INGOT) || s.is(Items.RAW_GOLD)
                             || s.is(Items.NETHERRACK) || s.is(Items.DIAMOND) || s.is(Items.SMITHING_TABLE)
                             || s.is(Items.FLINT_AND_STEEL) || s.is(Items.GOLDEN_HELMET) || s.is(Items.OBSIDIAN)) return 64;
+                }
+                case BREW -> {
+                    // Three water bottles going in, and a couple of batches coming out.
+                    if (s.is(Items.POTION)) return 9;
+                    // The stand, its fuel, bottles, wart, every ingredient and what improves them.
+                    if (s.is(Items.NETHER_WART) || s.is(Items.BLAZE_ROD) || s.is(Items.BLAZE_POWDER) || s.is(Items.BREWING_STAND)
+                            || s.is(Items.GLASS_BOTTLE) || s.is(Items.POTION) || s.is(Items.SOUL_SAND) || s.is(Items.SUGAR)
+                            || s.is(Items.SUGAR_CANE) || s.is(Items.MAGMA_CREAM) || s.is(Items.SLIME_BALL)
+                            || s.is(Items.GLISTERING_MELON_SLICE) || s.is(Items.MELON_SLICE) || s.is(Items.GOLD_NUGGET)
+                            || s.is(Items.GOLD_INGOT) || s.is(Items.GHAST_TEAR) || s.is(Items.GOLDEN_CARROT) || s.is(Items.CARROT)
+                            || s.is(Items.PUFFERFISH) || s.is(Items.GLOWSTONE_DUST) || s.is(Items.REDSTONE) || s.is(Items.GUNPOWDER)) return 64;
+                }
+                case CANE -> {
+                    if (s.is(Items.SUGAR_CANE)) return 64;
+                }
+                case PEN -> {
+                    if (s.is(ItemTags.WOODEN_FENCES) || s.is(ItemTags.FENCE_GATES) || s.is(Items.WHEAT) || s.is(Items.WHEAT_SEEDS)
+                            || s.is(Items.CARROT) || s.is(Items.POTATO) || s.is(Items.BEETROOT) || s.is(Items.BEETROOT_SEEDS)
+                            || s.is(Items.TORCH)) return 64;
+                }
+                case GARDEN -> {
+                    if (s.is(net.minecraft.tags.BlockItemTags.SMALL_FLOWERS.item()) || s.is(ItemTags.WOODEN_FENCES)
+                            || s.is(ItemTags.FENCE_GATES) || s.is(Items.TORCH) || s.is(Items.DIRT)) return 64;
+                }
+                case PATHS -> {
+                    if (s.is(ItemTags.WOODEN_FENCES) || s.is(Items.TORCH)) return 64;
+                }
+                case TREES -> {
+                    if (s.is(ItemTags.SAPLINGS) || s.is(Items.BONE_MEAL)) return 64;
                 }
                 default -> {
                 }
@@ -303,7 +355,8 @@ public final class Junk {
         for (int i = 0; i < Inv.MAIN_SLOTS; i++) {
             ItemStack stack = bot.getInventory().getItem(i);
             if (stack.isEmpty()) continue;
-            boolean toss = !isKeeper(stack) && !isValuable(stack); // never throw out treasure
+            // Never throw out treasure, or what the job on hand needs.
+            boolean toss = !isKeeper(stack) && !isValuable(stack) && forTheJob(brain, stack) == 0;
             // Way too much cobble and dirt: lose some. Not while building, though: that's the
             // roof and walls it's carrying. Planks never count (they're for crafting).
             // (A hoarder keeps its spare cobble to take home.)
@@ -351,7 +404,7 @@ public final class Junk {
             for (int i = 0; i < Inv.MAIN_SLOTS && pick < 0; i++) {
                 ItemStack s = inv.getItem(i);
                 if (s.isEmpty() || isValuable(s)) continue;
-                if (pass == 0 && !isKeeper(s)) pick = i;
+                if (pass == 0 && !isKeeper(s) && (bot.brain() == null || forTheJob(bot.brain(), s) == 0)) pick = i;
                 else if (pass == 1 && Inv.isObsolete(bot, s)) pick = i;
                 // A second slot of the same thing (two bows; furnaces and tables stack, so "three
                 // furnaces" is one slot and frees nothing), or a second stack of building blocks

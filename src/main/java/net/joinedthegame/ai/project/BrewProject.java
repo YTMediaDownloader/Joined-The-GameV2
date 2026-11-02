@@ -98,10 +98,10 @@ public final class BrewProject implements Task {
      * replanted yet: a fight came along). Only gone if the soul sand's gone.
      */
     public static @Nullable BlockPos patch(BotPlayer bot, BotBrain brain) {
-        GlobalPos here = GlobalPos.of(bot.level().dimension(), bot.blockPosition());
-        GlobalPos known = brain.memory().nearest("wart_patch", here, 256);
+        GlobalPos known = brain.memory().nearest("wart_patch", homeOrHere(bot, brain), 64);
         if (known == null) return null;
-        if (bot.level().isLoaded(known.pos()) && !bot.level().getBlockState(known.pos().below()).is(Blocks.SOUL_SAND)) {
+        if (known.dimension() == bot.level().dimension() && bot.level().isLoaded(known.pos())
+                && !bot.level().getBlockState(known.pos().below()).is(Blocks.SOUL_SAND)) {
             brain.memory().forget("wart_patch", known);
             return null;
         }
@@ -114,14 +114,23 @@ public final class BrewProject implements Task {
     }
 
     private static @Nullable BlockPos remembered(BotPlayer bot, BotBrain brain, String kind, net.minecraft.world.level.block.Block block) {
-        GlobalPos here = GlobalPos.of(bot.level().dimension(), bot.blockPosition());
-        GlobalPos known = brain.memory().nearest(kind, here, 256);
+        GlobalPos known = brain.memory().nearest(kind, homeOrHere(bot, brain), 64);
         if (known == null) return null;
-        if (bot.level().isLoaded(known.pos()) && !bot.level().getBlockState(known.pos()).is(block)) {
+        if (known.dimension() == bot.level().dimension() && bot.level().isLoaded(known.pos())
+                && !bot.level().getBlockState(known.pos()).is(block)) {
             brain.memory().forget(kind, known);
             return null;
         }
         return known.pos();
+    }
+
+    /**
+     * Where to look for the stand and the patch: round home, where they're set up. (Looked for
+     * round the bot, a bot off mining 900 blocks away "had no stand" and gave the project up.)
+     */
+    private static GlobalPos homeOrHere(BotPlayer bot, BotBrain brain) {
+        GlobalPos home = brain.record().home();
+        return home != null ? home : GlobalPos.of(bot.level().dimension(), bot.blockPosition());
     }
 
     private static boolean patchRipe(BotPlayer bot, @Nullable BlockPos patch) {
@@ -130,26 +139,55 @@ public final class BrewProject implements Task {
         return s.is(Blocks.NETHER_WART) && s.getValue(NetherWartBlock.AGE) >= NetherWartBlock.MAX_AGE;
     }
 
-    /** Could we get hold of one of these right now, from what's in the bag (or a bit of cane)? */
-    static boolean obtainable(BotPlayer bot, Brew b, boolean noCane) {
-        if (Inv.count(bot, b.ingredient()) > 0 && !(b.ingredient() == Items.BLAZE_POWDER && Inv.count(bot, Items.BLAZE_POWDER) < 2)) return true;
-        int gold = Inv.count(bot, Items.GOLD_NUGGET) + Inv.count(bot, Items.GOLD_INGOT) * 9;
-        int powderish = Inv.count(bot, Items.BLAZE_POWDER) + Inv.count(bot, Items.BLAZE_ROD) * 2;
+    /** In the bag, or put away in the chests at home (the project fetches it when it starts). */
+    static int have(BotPlayer bot, BotBrain brain, Item item) {
+        // (The remembered list: it works from anywhere, not just within sight of the chests.)
+        return Inv.count(bot, item) + net.joinedthegame.ai.Storage.stored(brain, item);
+    }
+
+    /**
+     * What to take out of the chests for a brewing session: the basics (wart, fuel, bottles, the
+     * stand, soul sand for a patch) and what the brew we'd make needs, not every ingredient there
+     * is (a bag of seventeen kinds of brewing things and no room for a sword).
+     */
+    public static boolean fetchFor(BotPlayer bot, BotBrain brain, net.minecraft.world.item.ItemStack s) {
+        if (s.is(Items.NETHER_WART) || s.is(Items.BLAZE_ROD) || s.is(Items.BLAZE_POWDER) || s.is(Items.BREWING_STAND)
+                || s.is(Items.GLASS_BOTTLE) || Brewer.isWater(s) || s.is(Items.SOUL_SAND)) return Inv.count(bot, s.getItem()) < 8;
+        Brew b = pick(bot, brain, false);
+        if (b == null) return false;
+        if (s.is(b.ingredient())) return Inv.count(bot, s.getItem()) < 2;
+        boolean makings = switch (b.name()) {
+            case "healing" -> s.is(Items.MELON_SLICE) || s.is(Items.GOLD_NUGGET) || s.is(Items.GOLD_INGOT);
+            case "fire resistance" -> s.is(Items.SLIME_BALL);
+            case "swiftness" -> s.is(Items.SUGAR_CANE);
+            case "night vision" -> s.is(Items.CARROT) || s.is(Items.GOLD_NUGGET) || s.is(Items.GOLD_INGOT);
+            default -> false;
+        };
+        boolean better = b.amplifies() && s.is(Items.GLOWSTONE_DUST) || b.extends_() && s.is(Items.REDSTONE)
+                || b.effect() == MobEffects.INSTANT_HEALTH && s.is(Items.GUNPOWDER);
+        return (makings || better) && Inv.count(bot, s.getItem()) < 4;
+    }
+
+    /** Could we get hold of one of these right now, from what we've got (or a bit of cane)? */
+    static boolean obtainable(BotPlayer bot, BotBrain brain, Brew b, boolean noCane) {
+        if (have(bot, brain, b.ingredient()) > 0 && !(b.ingredient() == Items.BLAZE_POWDER && have(bot, brain, Items.BLAZE_POWDER) < 2)) return true;
+        int gold = have(bot, brain, Items.GOLD_NUGGET) + have(bot, brain, Items.GOLD_INGOT) * 9;
+        int powderish = have(bot, brain, Items.BLAZE_POWDER) + have(bot, brain, Items.BLAZE_ROD) * 2;
         return switch (b.name()) {
-            case "healing" -> Inv.count(bot, Items.MELON_SLICE) > 0 && gold >= 8;
+            case "healing" -> have(bot, brain, Items.MELON_SLICE) > 0 && gold >= 8;
             case "strength" -> powderish >= 3; // one for fuel, one to brew with, to spare
-            case "fire resistance" -> Inv.count(bot, Items.SLIME_BALL) > 0 && powderish >= 2;
-            case "swiftness" -> Inv.count(bot, Items.SUGAR_CANE) > 0 || !noCane;
-            case "night vision" -> Inv.count(bot, Items.CARROT) > 0 && gold >= 8;
+            case "fire resistance" -> have(bot, brain, Items.SLIME_BALL) > 0 && powderish >= 2;
+            case "swiftness" -> have(bot, brain, Items.SUGAR_CANE) > 0 || !noCane;
+            case "night vision" -> have(bot, brain, Items.CARROT) > 0 && gold >= 8;
             default -> false;
         };
     }
 
     /** The next thing to brew: one we're short of and can make. */
-    static @Nullable Brew pick(BotPlayer bot, boolean noCane) {
+    static @Nullable Brew pick(BotPlayer bot, BotBrain brain, boolean noCane) {
         for (Brew b : MENU) {
             if (Potions.count(bot, b.effect()) >= WANT_EACH) continue;
-            if (obtainable(bot, b, noCane)) return b;
+            if (obtainable(bot, brain, b, noCane)) return b;
         }
         return null;
     }
@@ -158,12 +196,12 @@ public final class BrewProject implements Task {
     public static boolean worthIt(BotPlayer bot, BotBrain brain) {
         GlobalPos home = brain.record().home();
         if (home == null || home.dimension() != bot.level().dimension()) return false;
-        boolean wart = Inv.count(bot, Items.NETHER_WART) > 0 || patchRipe(bot, patch(bot, brain));
+        boolean wart = have(bot, brain, Items.NETHER_WART) > 0 || patchRipe(bot, patch(bot, brain));
         if (!wart) return false;
-        boolean stand = stand(bot, brain) != null || Inv.count(bot, Items.BREWING_STAND) > 0 || Inv.count(bot, Items.BLAZE_ROD) > 0;
+        boolean stand = stand(bot, brain) != null || have(bot, brain, Items.BREWING_STAND) > 0 || have(bot, brain, Items.BLAZE_ROD) > 0;
         if (!stand) return false;
-        boolean fuel = Inv.count(bot, Items.BLAZE_POWDER) + Inv.count(bot, Items.BLAZE_ROD) > 0 || stand(bot, brain) != null;
-        return fuel && pick(bot, false) != null;
+        boolean fuel = have(bot, brain, Items.BLAZE_POWDER) + have(bot, brain, Items.BLAZE_ROD) > 0 || stand(bot, brain) != null;
+        return fuel && pick(bot, brain, false) != null;
     }
 
     /**
@@ -172,7 +210,7 @@ public final class BrewProject implements Task {
      * left to replant it with) won't, so that counts as no patch.
      */
     public static boolean wantsWart(BotPlayer bot, BotBrain brain) {
-        if (Inv.count(bot, Items.NETHER_WART) > 0) return false;
+        if (have(bot, brain, Items.NETHER_WART) > 0) return false;
         GlobalPos here = GlobalPos.of(bot.level().dimension(), bot.blockPosition());
         if (brain.memory().nearest("brewing_stand", here, 100000) == null) return false;
         GlobalPos known = brain.memory().nearest("wart_patch", here, 100000);
@@ -244,7 +282,7 @@ public final class BrewProject implements Task {
             brain.log("brewing: out of nether wart");
             return Status.DONE;
         }
-        Brew next = pick(bot, this.noCane);
+        Brew next = pick(bot, brain, this.noCane);
         if (next == null) return Status.DONE;
 
         // Fuel: blaze powder, made from a rod.

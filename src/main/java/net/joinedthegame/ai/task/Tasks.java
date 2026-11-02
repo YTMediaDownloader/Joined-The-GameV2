@@ -14,6 +14,63 @@ public final class Tasks {
     private Tasks() {}
 
     /** Run these one after another; fails as soon as one does. */
+    /**
+     * {@code first}, then {@code then} whatever came of the first (a fetch from the chests that
+     * found nothing, or couldn't reach one, shouldn't sink the job it was for).
+     */
+    public static Task anyway(Task first, Task then) {
+        return new Task() {
+            private boolean firstDone;
+
+            @Override
+            public Status tick(BotPlayer bot, BotBrain brain) {
+                if (!this.firstDone) {
+                    if (first.tick(bot, brain) == Status.RUNNING) return Status.RUNNING;
+                    first.stop(bot, brain);
+                    this.firstDone = true;
+                }
+                return then.tick(bot, brain);
+            }
+
+            @Override
+            public void stop(BotPlayer bot, BotBrain brain) {
+                (this.firstDone ? then : first).stop(bot, brain);
+            }
+
+            @Override
+            public String activity() {
+                return this.firstDone ? then.activity() : first.activity();
+            }
+        };
+    }
+
+    /** A task worked out when it's reached, not before (null from the supplier: nothing to do). */
+    public static Task lazy(java.util.function.Supplier<@org.jspecify.annotations.Nullable Task> make) {
+        return new Task() {
+            private @org.jspecify.annotations.Nullable Task task;
+            private boolean made;
+
+            @Override
+            public Status tick(BotPlayer bot, BotBrain brain) {
+                if (!this.made) {
+                    this.made = true;
+                    this.task = make.get();
+                }
+                return this.task == null ? Status.DONE : this.task.tick(bot, brain);
+            }
+
+            @Override
+            public void stop(BotPlayer bot, BotBrain brain) {
+                if (this.task != null) this.task.stop(bot, brain);
+            }
+
+            @Override
+            public String activity() {
+                return this.task != null ? this.task.activity() : "Getting my things";
+            }
+        };
+    }
+
     public static Task sequence(Task... tasks) {
         return new Task() {
             private int i;

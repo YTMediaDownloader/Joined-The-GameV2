@@ -254,6 +254,37 @@ public final class ProjectGoal extends Goal {
 
     // --- running --------------------------------------------------------------------
 
+    /** What this project wants out of the chests: its keep list, or less where that's broad (brewing: this recipe's). */
+    private boolean wantedForKit(BotPlayer bot, Kind kind, net.minecraft.world.item.ItemStack s) {
+        if (kind == Kind.BREW) return net.joinedthegame.ai.project.BrewProject.fetchFor(bot, this.brain, s);
+        return net.joinedthegame.ai.Junk.forTheJob(this.brain, s) > Inv.count(bot, s.getItem());
+    }
+
+    /**
+     * The trip to the chests for the project's things, going by the remembered list of what's in
+     * them (Storage), so it works from anywhere: far from home, walk back first. Null if nothing
+     * it needs is put away.
+     */
+    private @Nullable Task kitFetch(BotPlayer bot, Kind kind) {
+        boolean anyStored = false;
+        for (var e : this.brain.memory().stored.entrySet()) {
+            if (e.getValue() <= 0) continue;
+            var item = net.minecraft.core.registries.BuiltInRegistries.ITEM.getValue(net.minecraft.resources.Identifier.parse(e.getKey()));
+            if (wantedForKit(bot, kind, new net.minecraft.world.item.ItemStack(item))) {
+                anyStored = true;
+                break;
+            }
+        }
+        if (!anyStored) return null;
+        GlobalPos home = this.brain.record().home();
+        if (home == null || home.dimension() != bot.level().dimension()) return null;
+        this.brain.log("project " + kind + ": getting my things for it out of the chests");
+        Task fetch = net.joinedthegame.ai.task.Tasks.lazy(() -> FetchTask.from(bot, this.brain, s -> wantedForKit(bot, kind, s),
+                64 * 6, "Getting my things out for it"));
+        if (home.pos().distSqr(bot.blockPosition()) <= 64 * 64) return fetch;
+        return net.joinedthegame.ai.task.Tasks.anyway(new net.joinedthegame.ai.task.TravelTask(home.pos(), 6, "Heading home for my things"), fetch);
+    }
+
     @Override
     public int priority(BotPlayer bot) {
         // Standing in a trial chamber and fit for it: that's the thing to do now, whatever today's
@@ -313,6 +344,12 @@ public final class ProjectGoal extends Goal {
                 case PATHS -> new net.joinedthegame.ai.project.PathsProject();
                 case BREW -> new net.joinedthegame.ai.project.BrewProject();
             };
+            // Its things are in the chests at home (everything but the everyday kit gets put away
+            // there): get them out first, up to what the job keeps on hand. Otherwise a bot with
+            // a chest full of leather goes hunting cows, and one with its wart put away "is out of
+            // wart" (both happened).
+            Task kit = kitFetch(bot, kind);
+            if (kit != null) this.task = net.joinedthegame.ai.task.Tasks.anyway(kit, this.task);
         }
         Task.Status status = this.task.tick(bot, this.brain);
         if (status == Task.Status.RUNNING) return true;
