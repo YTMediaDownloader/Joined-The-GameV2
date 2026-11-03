@@ -516,6 +516,15 @@ public final class NetherTrip implements Task {
         brain.rememberPlace(bot, "portal_frame", site.origin());
         this.portalCell = site.at(1, 1);
         this.portalFront = site.front();
+        // Get there first. Each block of a build has its time to go down in, and the walk counted:
+        // Redlantern started from twenty blocks down his mine, ran out of time on the first block
+        // while still climbing, had nothing to set the next against, and gave the trip up with one
+        // obsidian left on the grass.
+        if (site.origin().distSqr(bot.blockPosition()) > 6 * 6 && this.portalWalks < 2) {
+            this.portalWalks++;
+            this.sub = new TravelTask(site.origin(), 3, "Heading to where the portal's going");
+            return Status.RUNNING;
+        }
         this.sub = new BuildTask(site.steps(), "Building a nether portal");
         return Status.RUNNING;
     }
@@ -819,6 +828,8 @@ public final class NetherTrip implements Task {
     }
 
     private boolean wartTried;
+    /** Walks to the portal spot before building (twice at most: then build from where we are). */
+    private int portalWalks;
 
     /**
      * Nether wart from a fortress garden (the soul sand beds by the stairs), and a couple of the
