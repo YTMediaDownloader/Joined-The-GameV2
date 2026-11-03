@@ -114,6 +114,32 @@ public final class JtgCommand {
                             .then(Commands.literal("home")
                                     .then(Commands.argument("at", net.minecraft.commands.arguments.coordinates.BlockPosArgument.blockPos())
                                             .executes(JtgCommand::debugHome)))
+                            .then(Commands.literal("netherkit").executes(c -> {
+                                // (Testing: full diamond, the tools, a portal's worth of obsidian and
+                                // a light, food; and off to plan a nether trip. Skips the gearing up.)
+                                BotManager m = BotManager.get(c.getSource().getServer());
+                                BotRecord r = m.roster().get(name(c));
+                                BotPlayer b = r == null ? null : m.online(r);
+                                BotBrain br = r == null ? null : m.brain(r.uuid());
+                                if (b == null || br == null) return 0;
+                                b.setItemSlot(net.minecraft.world.entity.EquipmentSlot.HEAD, new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.DIAMOND_HELMET));
+                                b.setItemSlot(net.minecraft.world.entity.EquipmentSlot.CHEST, new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.DIAMOND_CHESTPLATE));
+                                b.setItemSlot(net.minecraft.world.entity.EquipmentSlot.LEGS, new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.DIAMOND_LEGGINGS));
+                                b.setItemSlot(net.minecraft.world.entity.EquipmentSlot.FEET, new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.DIAMOND_BOOTS));
+                                b.setItemSlot(net.minecraft.world.entity.EquipmentSlot.OFFHAND, new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.SHIELD));
+                                for (var st : new net.minecraft.world.item.ItemStack[]{
+                                        new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.DIAMOND_SWORD),
+                                        new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.DIAMOND_PICKAXE),
+                                        new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.OBSIDIAN, 12),
+                                        new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.FLINT_AND_STEEL),
+                                        new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.COOKED_BEEF, 32),
+                                        new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.COBBLESTONE, 64)}) {
+                                    if (!b.getInventory().add(st)) b.drop(st, false);
+                                }
+                                br.setFocus(BotBrain.Focus.NETHER, b.level().getGameTime());
+                                c.getSource().sendSuccess(() -> Component.literal(r.name() + ": nether kit, and off to plan a nether trip (testing)"), false);
+                                return 1;
+                            }))
                             .then(Commands.literal("stash")
                                     .then(Commands.argument("at", net.minecraft.commands.arguments.coordinates.BlockPosArgument.blockPos())
                                             .executes(c -> {
