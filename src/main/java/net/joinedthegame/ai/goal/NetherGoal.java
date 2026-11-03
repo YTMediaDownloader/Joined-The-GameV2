@@ -32,6 +32,15 @@ public final class NetherGoal extends Goal {
             }
             return 0;
         }
+        // Just back (or just respawned after dying over there): settle the trip now, before
+        // anything reads what it's doing.
+        if (this.trip != null && !NetherTrip.inNether(bot)) {
+            Task.Status back = this.trip.backFrom(bot, this.brain);
+            if (back != null) {
+                finish(bot, back);
+                return 0;
+            }
+        }
         if (NetherTrip.inNether(bot)) return 40;
         if (this.brain.focus() != BotBrain.Focus.NETHER) return 0;
         // Setting off: in daylight, like anyone sensible.
@@ -49,6 +58,11 @@ public final class NetherGoal extends Goal {
         if (this.trip == null) this.trip = new NetherTrip();
         Task.Status status = this.trip.tick(bot, this.brain);
         if (status == Task.Status.RUNNING) return true;
+        finish(bot, status);
+        return false;
+    }
+
+    private void finish(BotPlayer bot, Task.Status status) {
         this.trip.stop(bot, this.brain);
         this.brain.log("nether trip " + status);
         this.trip = null;
@@ -58,7 +72,6 @@ public final class NetherGoal extends Goal {
         } else {
             this.brain.focusDone(BotBrain.Focus.NETHER);
         }
-        return false;
     }
 
     @Override

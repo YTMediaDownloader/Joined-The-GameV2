@@ -2279,6 +2279,11 @@ public final class BotBrain {
         this.searchHeadingAt = this.now;
     }
 
+    /** Game time it last died. */
+    public long lastDeathAt() {
+        return this.lastDeathAt;
+    }
+
     /** When it was last moved somewhere else outright (not a respawn, not a portal). */
     public long lastTeleportAt() {
         return this.lastTeleportAt;

@@ -127,6 +127,9 @@ public final class TestKits {
         }
         if (kit.levels() > 0) bot.giveExperienceLevels(kit.levels());
         long now = bot.level().getGameTime();
+        // Its needs as they are now, with the kit on: still reckoning on the empty-handed bot from
+        // a moment ago, it drops a nether focus straight away for want of gear.
+        brain.needs().updateNow(bot, brain);
         if (kit.project() != null) brain.projects().force(kit.project(), now);
         else if (kit.focus() != null) brain.setFocus(kit.focus(), now);
         brain.log("testing kit '" + name + "': " + kit.what());

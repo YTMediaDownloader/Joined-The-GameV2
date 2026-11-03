@@ -55,6 +55,12 @@ public final class Needs {
     }
 
     /** Recompute (every few seconds is plenty). */
+    /** Now, not at the next five-second update (its kit or situation just changed outright). */
+    public void updateNow(BotPlayer bot, BotBrain brain) {
+        this.updatedAt = Long.MIN_VALUE / 2;
+        update(bot, brain);
+    }
+
     public void update(BotPlayer bot, BotBrain brain) {
         long now = brain.now();
         if (now - this.updatedAt < 100) return;

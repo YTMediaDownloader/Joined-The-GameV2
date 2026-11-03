@@ -106,6 +106,26 @@ public final class NetherTrip implements Task {
         };
     }
 
+    /**
+     * Was over there and isn't any more: back through a portal (the trip's done), or died over
+     * there and respawned in the overworld (it's failed: everything it took is lying in the
+     * nether). Null while it's still going. DanTDM's death to a wither skeleton counted as a trip
+     * done, and his first moment back was logged as "In the nether, heading to a fortress".
+     */
+    public @org.jspecify.annotations.Nullable Status backFrom(BotPlayer bot, BotBrain brain) {
+        if (inNether(bot) || this.stage != Stage.NETHER && this.stage != Stage.RETURN) return null;
+        brain.remember(BotMemory.EventType.VISITED, "the nether", null, 0.8f);
+        this.sub = null;
+        this.note = "";
+        if (brain.now() - brain.lastDeathAt() < 20 * 60 * 2) {
+            brain.log("died in the nether: that trip's over");
+            this.stage = Stage.DONE;
+            return Status.FAILED;
+        }
+        this.stage = Stage.DONE;
+        return Status.DONE;
+    }
+
     public static boolean inNether(BotPlayer bot) {
         return bot.level().dimension() == Level.NETHER;
     }
@@ -119,10 +139,8 @@ public final class NetherTrip implements Task {
             this.sub = null;
             arrived(bot, brain);
         }
-        if (!inNether(bot) && (this.stage == Stage.NETHER || this.stage == Stage.RETURN)) {
-            brain.remember(BotMemory.EventType.VISITED, "the nether", null, 0.8f);
-            this.stage = Stage.DONE;
-        }
+        Status back = backFrom(bot, brain);
+        if (back == Status.FAILED) return Status.FAILED;
         // Out looking for a bastion and one's turned up: stop wandering, go to it.
         if (this.sub != null && this.lookingForBastion && this.ticks % 40 == 0 && BastionRaid.pick(bot, brain) != null) {
             this.sub.stop(bot, brain);

@@ -1223,6 +1223,22 @@ public final class CombatGoal extends Goal {
                 this.brain.log("cornered, pillaring up");
             }
         }
+        // Still cornered with something hitting us up close and nothing built (the nether, where we
+        // don't box or pillar, or no blocks to do it with): running only means being hit in the back
+        // the whole way. DanTDM ran from a wither skeleton, digging his way up through netherrack,
+        // from 17.7 health to dead in ten seconds without swinging once. Turn and fight it.
+        if (cornered && this.hide == null && this.retreatCover == null) {
+            Mob onUs = nearby.stream().filter(m -> !isRanged(m) && m.distanceToSqr(bot) < 3 * 3)
+                    .min(java.util.Comparator.comparingDouble(m -> m.distanceToSqr(bot))).orElse(null);
+            if (onUs != null) {
+                nav.stop(bot);
+                this.retreating = false;
+                this.fightItOutUntil = this.brain.now() + 20 * 15;
+                this.target = onUs;
+                this.brain.log("can't shake it off and nowhere to hide: fighting it out");
+                return true;
+            }
+        }
         return this.retreatTicks < 20 * 45;
     }
 
