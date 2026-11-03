@@ -413,6 +413,18 @@ public final class Navigator {
         PathNode from = this.path.get(this.index - 1);
         WorldView world = new WorldView(bot.level());
 
+        // 0a. Lava where the path goes. It flows: a lavafall spread across a route planned a moment
+        // before and Redlantern walked into it. Stop and find another way before stepping in (new
+        // routes never go through lava, and keep a block from it where they can).
+        for (int i = this.index; i < Math.min(this.index + 3, this.path.size()); i++) {
+            BlockPos cell = this.path.get(i).pos();
+            if (world.isLava(cell) || world.isLava(cell.above()) || world.isLava(cell.below())) {
+                controls.forward = 0;
+                repath(bot);
+                return;
+            }
+        }
+
         // 0b. Shut the door behind us (keeps the zombies out of the house and the farm).
         closeDoorBehind(bot, world);
 

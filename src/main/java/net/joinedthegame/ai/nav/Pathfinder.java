@@ -170,7 +170,8 @@ public final class Pathfinder {
                 if (c.step.pos().getY() > this.options.maxY) continue;
                 if (this.options.covered && !c.step.pos().closerThan(start, 1.8) && outInTheOpen(c.step.pos())) continue;
                 if (c.step.place() != null && this.occupied.contains(c.step.place().asLong())) continue; // someone's in the way
-                double g = node.g + c.cost + (this.occupied.contains(c.step.pos().asLong()) ? 3 : 0);
+                double g = node.g + c.cost + (this.occupied.contains(c.step.pos().asLong()) ? 3 : 0)
+                        + (besideLava(c.step.pos()) ? 12 : 0);
                 long key = c.step.pos().asLong();
                 Node existing = best.get(key);
                 if (existing != null && existing.g <= g) continue;
@@ -181,6 +182,35 @@ public final class Pathfinder {
         }
         if (closest == first) return null;
         return new Path(trace(closest), false);
+    }
+
+    /**
+     * Lava right beside this spot (any of the eight cells round it, at our feet or the ground
+     * we'd step on): a player gives it a block's room. A bot is 0.6 wide and cuts the corner
+     * a little steering; walking the very edge of a pool, one nudge and it's in (Redlantern, on
+     * his way to some trees). Not forbidden (sometimes it's the only way, the nether), just dear.
+     */
+    private boolean besideLava(BlockPos feet) {
+        // Once per cell a search (the same cell comes up again and again as a neighbour).
+        long key = feet.asLong();
+        byte known = this.lavaBeside.get(key);
+        if (known != 0) return known == 2;
+        boolean near = lavaAround(feet);
+        this.lavaBeside.put(key, near ? (byte) 2 : (byte) 1);
+        return near;
+    }
+
+    /** Remembered answers for this search: 0 not worked out, 1 no lava beside, 2 lava beside. */
+    private final it.unimi.dsi.fastutil.longs.Long2ByteOpenHashMap lavaBeside = new it.unimi.dsi.fastutil.longs.Long2ByteOpenHashMap();
+
+    private boolean lavaAround(BlockPos feet) {
+        for (int dx = -1; dx <= 1; dx++) {
+            for (int dz = -1; dz <= 1; dz++) {
+                if (dx == 0 && dz == 0) continue;
+                if (this.world.isLava(feet.offset(dx, 0, dz)) || this.world.isLava(feet.offset(dx, -1, dz))) return true;
+            }
+        }
+        return false;
     }
 
     /**
