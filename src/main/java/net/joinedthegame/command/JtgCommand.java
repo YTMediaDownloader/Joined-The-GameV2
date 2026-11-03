@@ -134,7 +134,7 @@ public final class JtgCommand {
                                         new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.FLINT_AND_STEEL),
                                         new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.COOKED_BEEF, 32),
                                         new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.COBBLESTONE, 64)}) {
-                                    if (!b.getInventory().add(st)) b.drop(st, false);
+                                    if (!b.getInventory().add(st)) net.joinedthegame.ai.task.CraftTask.give(b, st);
                                 }
                                 br.setFocus(BotBrain.Focus.NETHER, b.level().getGameTime());
                                 c.getSource().sendSuccess(() -> Component.literal(r.name() + ": nether kit, and off to plan a nether trip (testing)"), false);
