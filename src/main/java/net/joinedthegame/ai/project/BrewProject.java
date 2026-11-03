@@ -145,10 +145,10 @@ public final class BrewProject implements Task {
     /** In the bag, or put away in the chests at home (the project fetches it when it starts). */
     static int have(BotPlayer bot, BotBrain brain, Item item) {
         // (The remembered list: it works from anywhere, not just within sight of the chests.)
-        // (Plus the secret stash, where gold goes, when home's close enough to look in it.)
-        var p = (java.util.function.Predicate<net.minecraft.world.item.ItemStack>) s -> s.is(item);
-        int stash = net.joinedthegame.ai.task.FetchTask.inStash(bot, brain, p) - net.joinedthegame.ai.task.FetchTask.stored(bot, brain, p);
-        return Inv.count(bot, item) + net.joinedthegame.ai.Storage.stored(brain, item) + Math.max(0, stash);
+        // (Not the secret stash: opening chests here, forty times over for every look at the
+        // menu, every half second near home, was far too dear. The stash is gone through once,
+        // when the project starts and fetches its things.)
+        return Inv.count(bot, item) + net.joinedthegame.ai.Storage.stored(brain, item);
     }
 
     /**

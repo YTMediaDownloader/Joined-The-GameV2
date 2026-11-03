@@ -34,6 +34,10 @@ public final class ShelterGoal extends Goal {
     public int priority(BotPlayer bot) {
         if (this.brain.inTrialChamber(bot)) return 0; // underground on a chamber run: no need to dig in
         if (!bot.level().isDarkOutside()) return 0;
+        // Badly hurt with nothing to eat: no healing at all (that takes food 18+), so a cave's no
+        // safer than the surface tonight. Hole up and stay put till morning, wherever we are
+        // (Redlantern went exploring a cave on 6 health with no food and met a skeleton).
+        if (bot.getHealth() < bot.getMaxHealth() * 0.5f && Inv.bestFood(bot, true) < 0) return 68;
         if (nightReady(bot)) return 0;
         // Out in open water, at the top or under it: under the surface the sky's "hidden", but
         // that's no shelter (drowned come up from below, and there's no digging in here). Make for

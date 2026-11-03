@@ -266,7 +266,10 @@ public final class Navigator {
 
     /** Stay under cover (set by the brain each tick: mining at night from a hole, see BotBrain). */
     public boolean underCover;
-    /** No putting blocks down to get there (tidying up: no pillaring up to take a pillar down). */
+    /**
+     * Walking only: no putting blocks down and no digging to get there (tidying up: no pillaring
+     * up to take a pillar down, no tunnelling through the hill to fetch one block).
+     */
     public boolean noPlacing;
 
     /**
@@ -331,7 +334,7 @@ public final class Navigator {
         }
         Pathfinder.Options options = Pathfinder.Options.normal(bot).below(this.ceiling);
         if (this.underCover) options = options.underCover();
-        if (this.noPlacing) options = new Pathfinder.Options(options.allowDig(), false, options.maxFall(), options.maxNodes(), options.maxY(), options.covered());
+        if (this.noPlacing) options = new Pathfinder.Options(false, false, options.maxFall(), options.maxNodes(), options.maxY(), options.covered());
         Pathfinder finder = new Pathfinder(bot, options);
         Pathfinder.Path found = finder.find(start, this.goalPoint, this.goal);
         if (found == null || found.nodes().size() < 2) {

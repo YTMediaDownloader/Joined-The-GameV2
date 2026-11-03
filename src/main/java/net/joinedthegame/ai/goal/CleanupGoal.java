@@ -120,7 +120,7 @@ public final class CleanupGoal extends Goal {
         Navigator nav = this.brain.navigator();
         if (!BlockBreaker.inReach(bot, pos)) {
             if (!nav.isMoving()) {
-                nav.noPlacing = true; // no new pillars to take the old ones down
+                nav.noPlacing = true; // on foot: no new pillars, no tunnels (Grian dug into a hill to tidy)
                 nav.moveToReach(bot, pos);
                 nav.noPlacing = false;
                 if (nav.status() == Navigator.Status.FAILED) {
